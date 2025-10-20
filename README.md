@@ -1,6 +1,5 @@
 # Structure Aware Neural Architecture Search for Mixture of Experts
 
-[![License](https://badgen.net/github/license/intsystems/nas-for-moe?color=green)](https://github.com/intsystems/nas-for-moe/blob/master/LICENSE)
 [![GitHub Contributors](https://img.shields.io/github/contributors/intsystems/nas-for-moe)](https://github.com/intsystems/nas-for-moe/graphs/contributors)
 
 <table>
@@ -23,7 +22,14 @@
 
 ## Abstract
 
-TODO
+The Mixture-of-Experts (MoE) layer, a sparsely activated neural architecture controlled by a
+routing mechanism, has recently achieved remarkable success across large-scale deep learning tasks. In
+parallel, Neural Architecture Search (NAS) has emerged as a powerful methodology for automatically
+discovering high-performing neural network. However, the application of NAS methods to MoE architectures
+remains an underexplored research area. In this work, we propose an architecture search framework for MoE
+models, which explicitly leverages the underlying cluster structure of the data. We evaluate the proposed
+approach on computer vision benchmarks and demonstrate that it outperforms baseline MoE architectures
+trained on the same datasets in terms of accuracy and computational efficiency.
 
 ## Citation
 
