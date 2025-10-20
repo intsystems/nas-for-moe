@@ -1,4 +1,4 @@
-# Title
+# Structure Aware Neural Architecture Search for Mixture of Experts
 
 [![License](https://badgen.net/github/license/intsystems/nas-for-moe?color=green)](https://github.com/intsystems/nas-for-moe/blob/master/LICENSE)
 [![GitHub Contributors](https://img.shields.io/github/contributors/intsystems/nas-for-moe)](https://github.com/intsystems/nas-for-moe/graphs/contributors)
@@ -17,8 +17,9 @@
 ## Assets
 
 - [Code](code)
-- [Paper](paper/main.pdf)
-- [Slides](slides/main.pdf)
+- [Paper overleaf](https://www.overleaf.com/5135847529jtnqzphbjwmk#b47970)
+- [Paper pdf](paper/main.pdf)
+- [Slides pdf](slides/main.pdf)
 
 ## Abstract
 
@@ -28,7 +29,7 @@ TODO
 
 If you find our work helpful, please cite us.
 ```BibTeX
-@article{citekey,
+@article{babkin2025structure,
     title={Title},
     author={Petr Babkin, Oleg Bakhteev},
     year={2025}
