@@ -1,9 +1,7 @@
 # Title
 
-[![License](https://badgen.net/github/license/intsystems/nas-for-moe?color=green)](https://github.com/intsystems/nas-for-moe/blob/main/LICENSE)
+[![License](https://badgen.net/github/license/intsystems/nas-for-moe?color=green)](https://github.com/intsystems/nas-for-moe/blob/master/LICENSE)
 [![GitHub Contributors](https://img.shields.io/github/contributors/intsystems/nas-for-moe)](https://github.com/intsystems/nas-for-moe/graphs/contributors)
-[![GitHub Issues](https://img.shields.io/github/issues-closed/intsystems/nas-for-moe.svg?color=0088ff)](https://github.com/intsystems/nas-for-moe/issues)
-[![GitHub Pull Requests](https://img.shields.io/github/issues-pr-closed/intsystems/nas-for-moe.svg?color=7f29d6)](https://github.com/intsystems/nas-for-moe/pulls)
 
 <table>
     <tr>
