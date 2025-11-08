@@ -71,7 +71,7 @@ RUN jupyter lab --generate-config && \
     echo "c.ServerApp.ip = '0.0.0.0'" >> /root/.jupyter/jupyter_lab_config.py && \
     echo "c.ServerApp.allow_root = True" >> /root/.jupyter/jupyter_lab_config.py && \
     echo "c.ServerApp.open_browser = False" >> /root/.jupyter/jupyter_lab_config.py && \
-    echo "c.ServerApp.port = 8888" >> /root/.jupyter/jupyter_lab_config.py && \
+    echo "c.ServerApp.port = 8887" >> /root/.jupyter/jupyter_lab_config.py && \
     echo "c.ServerApp.notebook_dir = '/'" >> /root/.jupyter/jupyter_lab_config.py && \
     echo "jupyter lab --allow-root" > /app/launch_jupyter.sh && \
     chmod +x /app/launch_jupyter.sh

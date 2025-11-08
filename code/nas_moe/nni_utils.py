@@ -863,11 +863,12 @@ class PixelPermutationSpace(NDScustom):
                  dataset: Literal['cifar', 'imagenet', 'mnist'] = 'cifar',
                  auxiliary_loss: bool = False,
                  drop_path_prob: float = 0.,
-                 permutation: Optional[torch.Tensor] = None):
+                 permutation: Optional[torch.Tensor] = None,
+                 num_nodes_per_cell = 4):
         OPS['pixel_permutation'] = lambda C, stride, affine: PixelPermutationLayer(permutation)
         super().__init__(self.PIXELPERMUTATION_OPS,
                          merge_op='all',
-                         num_nodes_per_cell=4,
+                         num_nodes_per_cell=num_nodes_per_cell,
                          width=width,
                          num_cells=num_cells,
                          dataset=dataset,

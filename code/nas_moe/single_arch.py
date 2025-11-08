@@ -2,15 +2,18 @@ import random
 import numpy as np 
 
 class ArchitectureGenerator:
-    def __init__(self, model_space, num_nodes, base_seed=42):
+    def __init__(self, model_space, num_nodes, base_seed=42, remove_permutation=False):
         self.base_seed = base_seed
         self.counter = 0
         self.model_space = model_space
         self.num_nodes = num_nodes
+        self.remove_permutation = remove_permutation
 
     def generate_cells(self, rng, name="normal"):
         cells = {}
-        operations = self.model_space.op_candidates
+        operations = self.model_space.op_candidates.copy()
+        if self.remove_permutation:
+            operations.remove('pixel_permutation')
 
         for i in range(self.num_nodes - 1):
             cur_indexes = list(range(i + 2))

@@ -7,18 +7,6 @@ import matplotlib.pyplot as plt
 from PIL import Image
 
 
-def set_seed(seed: int):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-    
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
 def plot_single_cell(arch_dict, cell_name):
     g = graphviz.Digraph(
         node_attr=dict(style='filled', shape='rect', align='center'),
@@ -36,7 +24,7 @@ def plot_single_cell(arch_dict, cell_name):
     for i in range(2, 6):
         for j in range(2):
             op = arch_dict[f'{cell_name}/op_{i}_{j}']
-            from_ = arch_dict[f'{cell_name}/input_{i}_{j}']
+            from_ = arch_dict[f'{cell_name}/input_{i}_{j}'][0]
             if from_ == 0:
                 u = 'c_{k-2}'
             elif from_ == 1:
