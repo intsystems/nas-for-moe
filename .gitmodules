@@ -1,0 +1,3 @@
+[submodule "code/third_party/Pytorch-VAE"]
+	path = code/third_party/Pytorch-VAE
+	url = git@github.com:intsystems/nas-for-moe.git
