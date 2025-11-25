@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3.10 \
         python3.10-dev \
         python3.10-distutils \
+        graphviz \
         libgl1 libglib2.0-0 \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10 \
     && rm -rf /var/lib/apt/lists/*

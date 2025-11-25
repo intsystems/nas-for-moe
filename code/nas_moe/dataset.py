@@ -1,6 +1,13 @@
 import random
 import torch
 from torchvision import datasets, transforms
+from .graph import Graph
+import torch
+from torch_geometric.data import Dataset, Data
+from torch_geometric.utils import dense_to_sparse
+import json
+import numpy as np
+from pathlib import Path
 
 class DistortedMNIST(datasets.MNIST):
 
@@ -115,3 +122,96 @@ class DistortedCIFAR10(datasets.CIFAR10):
             raise ValueError(f"Unsupported distortion: {distortion}")
 
         return img
+
+
+
+class ArchClusterACCDataset(Dataset):
+    @staticmethod
+    def preprocess(adj, features):
+        adj = torch.tensor(adj, dtype=torch.float)
+        features = torch.tensor(features, dtype=torch.float)
+        return adj, features
+
+    @staticmethod
+    def process_graph(graph):
+        adj, _, features = graph.get_adjacency_matrix()
+        adj, features = ArchClusterACCDataset.preprocess(adj, features)
+        return graph.index, adj, features
+
+    def __init__(self, model_dicts_paths, cluster_val, labels_val):
+        """
+        Args:
+            model_paths: список путей к JSON файлам моделей
+            cluster_val: numpy array с метками кластеров для валидационных данных
+            labels_val: numpy array с истинными метками для валидационных данных
+        """
+        self.model_dicts_paths = model_dicts_paths
+        self.cluster_val = cluster_val
+        self.labels_val = labels_val
+        
+        # Предвычисляем уникальные кластеры для эффективности
+        self.unique_clusters = np.unique(cluster_val)
+        
+    def compute_cluster_accuracies(self, predictions):
+        """
+        Вычисляет точность модели на каждом кластере валидационных данных
+        
+        Args:
+            predictions: numpy array с предсказаниями модели
+            
+        Returns:
+            torch.Tensor: вектор точностей на кластерах
+        """
+        preds = np.array(predictions)
+        is_correct = (preds == self.labels_val)
+        
+        clusters_acc_list = []
+        for cluster_id in self.unique_clusters:
+            cluster_indexes = (self.cluster_val == cluster_id)
+            cluster_results = is_correct[cluster_indexes]
+            
+            if cluster_results.size > 0:
+                cluster_acc = cluster_results.sum() / cluster_results.size
+            else:
+                cluster_acc = 0.0
+                
+            clusters_acc_list.append(cluster_acc)
+        
+        return torch.tensor(clusters_acc_list, dtype=torch.float)
+
+    def __getitem__(self, index):
+        path = self.model_dicts_paths[index]
+        with path.open("r", encoding="utf-8") as f:
+            model_dict = json.load(f)
+        
+        # Загружаем граф архитектуры
+        graph = Graph(model_dict['architecture'], index=index)
+        _, adj, features = self.process_graph(graph)
+        
+        edge_index, _ = dense_to_sparse(adj)
+        
+        # Вычисляем вектор точностей на кластерах
+        valid_predictions = model_dict['valid_predictions']
+        cluster_acc_vector = self.compute_cluster_accuracies(valid_predictions)
+        cluster_acc_vector = cluster_acc_vector.unsqueeze(0)
+        
+        # Создаем объект Data
+        data = Data(
+            x=features, 
+            edge_index=edge_index,
+            y=cluster_acc_vector  # вектор точностей на кластерах
+        )
+        data.index = index
+        
+        return data
+
+    def __len__(self):
+        return len(self.model_dicts_paths)
+
+    
+
+
+
+
+
+
