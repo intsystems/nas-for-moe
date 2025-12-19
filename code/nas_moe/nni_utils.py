@@ -187,6 +187,29 @@ OPS = {
         )
 }
 
+
+OPS_PARAMS_NUM = {
+    "none": 0,
+    "avg_pool_2x2": 0,
+    "avg_pool_3x3": 0,
+    "avg_pool_5x5": 0,
+    "max_pool_2x2": 0,
+    "max_pool_3x3": 0,
+    "max_pool_5x5": 0,
+    "max_pool_7x7": 0,
+    "skip_connect": 0,
+    "conv_1x1": 1088,
+    "conv_3x3": 9280,
+    "sep_conv_3x3": 2752,
+    "sep_conv_5x5": 3776,
+    "sep_conv_7x7": 5312,
+    "dil_conv_3x3": 1376,
+    "dil_conv_5x5": 1888,
+    "dil_sep_conv_3x3": 2752,
+    "conv_3x1_1x3": 6208,
+    "conv_7x1_1x7": 14400
+}
+
 class ReLUConvBN(nn.Sequential):
 
     def __init__(self, C_in, C_out, kernel_size, stride, padding, affine=True):

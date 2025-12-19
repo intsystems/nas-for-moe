@@ -29,7 +29,7 @@ docker run \
     -p 8887:8887 \
     -e DISPLAY=$DISPLAY \
     --shm-size=64g \
-    -v /home/pbabkin:/pbabkin \
+    -v /home/petr:/pbabkin \
     -v /tmp/.X11-unix:/tmp/.X11-unix \
     --env LIBGL_ALWAYS_SOFTWARE=1 \
     --volume="$XAUTH:$XAUTH" \

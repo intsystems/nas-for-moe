@@ -138,30 +138,16 @@ class ArchClusterACCDataset(Dataset):
         adj, features = ArchClusterACCDataset.preprocess(adj, features)
         return graph.index, adj, features
 
-    def __init__(self, model_dicts_paths, cluster_val, labels_val):
-        """
-        Args:
-            model_paths: список путей к JSON файлам моделей
-            cluster_val: numpy array с метками кластеров для валидационных данных
-            labels_val: numpy array с истинными метками для валидационных данных
-        """
+    def __init__(self, model_dicts_paths, cluster_val, labels_val, target_cluster):
         self.model_dicts_paths = model_dicts_paths
         self.cluster_val = cluster_val
         self.labels_val = labels_val
+        self.target_cluster = target_cluster
         
         # Предвычисляем уникальные кластеры для эффективности
         self.unique_clusters = np.unique(cluster_val)
         
     def compute_cluster_accuracies(self, predictions):
-        """
-        Вычисляет точность модели на каждом кластере валидационных данных
-        
-        Args:
-            predictions: numpy array с предсказаниями модели
-            
-        Returns:
-            torch.Tensor: вектор точностей на кластерах
-        """
         preds = np.array(predictions)
         is_correct = (preds == self.labels_val)
         
@@ -193,7 +179,10 @@ class ArchClusterACCDataset(Dataset):
         # Вычисляем вектор точностей на кластерах
         valid_predictions = model_dict['valid_predictions']
         cluster_acc_vector = self.compute_cluster_accuracies(valid_predictions)
-        cluster_acc_vector = cluster_acc_vector.unsqueeze(0)
+        if self.target_cluster == 'all':
+            cluster_acc_vector = cluster_acc_vector.unsqueeze(0)
+        else:
+            cluster_acc_vector = cluster_acc_vector[self.target_cluster].unsqueeze(0)
         
         # Создаем объект Data
         data = Data(

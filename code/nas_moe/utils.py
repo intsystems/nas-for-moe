@@ -11,6 +11,7 @@ import os
 import os.path
 import torch
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 
 def plot_single_cell(arch_dict, cell_name):
@@ -148,3 +149,277 @@ def xavier_initialize(model):
     for p in parameters:
         init.xavier_normal(p)
 
+def evaluate_surrogate(surr: torch.nn.Module, loader: torch.utils.data.DataLoader, device: str = "cpu",
+                       criterion: torch.nn.Module = None) -> float:
+    """Вычисляет средний loss на loader (набор батчей Data)."""
+    if criterion is None:
+        criterion = torch.nn.MSELoss()
+    surr.to(device)
+    surr.eval()
+    total_loss = 0.0
+    n_batches = 0
+    with torch.no_grad():
+        for batch in loader:
+            batch = batch.to(device)
+            out = surr(batch.x, batch.edge_index, batch.batch)
+            loss = criterion(out, batch.y)
+            total_loss += loss.item()
+            n_batches += 1
+    return total_loss / max(1, n_batches)
+
+
+def train_surrogate_with_val(surr: torch.nn.Module,
+                             train_loader: torch.utils.data.DataLoader,
+                             test_loader: torch.utils.data.DataLoader = None,
+                             device: str = "cpu",
+                             lr: float = 1e-3,
+                             epochs: int = 50,
+                             weight_decay: float = 0.0,
+                             checkpoint_path: str = None,
+                             verbose: bool = False) -> dict:
+    """
+    Тренировочный цикл для surrogate GNN с логированием train/val loss и отрисовкой графиков.
+
+    Возвращает history = {'train': [...], 'test': [...]}.
+    """
+    optimizer = torch.optim.Adam(surr.parameters(), lr=lr, weight_decay=weight_decay)
+    criterion = torch.nn.MSELoss()
+    history = {'train': [], 'test': []}
+
+    surr.to(device)
+    if verbose:
+        iterator = range(1, epochs + 1)
+    else:
+        iterator = tqdm(range(1, epochs + 1), desc="Training surrogate")
+    for epoch in iterator:
+        surr.train()
+        train_loss = 0.0
+        n_batches = 0
+        for batch in train_loader:
+            batch = batch.to(device)
+            optimizer.zero_grad()
+            out = surr(batch.x, batch.edge_index, batch.batch)
+            loss = criterion(out, batch.y)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item()
+            n_batches += 1
+        train_loss /= max(1, n_batches)
+        test_loss = None
+        if test_loader is not None:
+            test_loss = evaluate_surrogate(surr, test_loader, device, criterion)
+
+        history['train'].append(train_loss)
+        history['test'].append(test_loss if test_loss is not None else float('nan'))
+
+        if verbose:
+            if test_loss is not None:
+                print(f"Epoch {epoch}/{epochs}  train_loss={train_loss:.6f}  test_loss={test_loss:.6f}")
+            else:
+                print(f"Epoch {epoch}/{epochs}  train_loss={train_loss:.6f}")
+
+        if checkpoint_path:
+            torch.save({'epoch': epoch, 'model_state': surr.state_dict(),
+                        'optimizer_state': optimizer.state_dict()}, checkpoint_path)
+
+    # plt.figure(figsize=(8, 5))
+    # plt.plot(history['train'], label='train')
+    # if test_loader is not None:
+    #     plt.plot(history['test'], label='test')
+    # plt.xlabel('epoch')
+    # plt.ylabel('MSE loss')
+    # plt.title('Surrogate training')
+    # plt.yscale('log')
+    # plt.grid(True)
+    # plt.legend()
+    # plt.tight_layout()
+    # plt.show()
+
+    return history
+
+
+def train_model(
+    model,
+    train_loader,
+    test_loader,
+    optimizer,
+    criterion,
+    num_epochs: int,
+    device: torch.device,
+    scheduler=None,
+    save_checkpoint: bool = True,
+    checkpoint_dir: str = "checkpoints",
+    verbose: bool = True,
+):
+    
+    # Создать директорию для чекпоинтов
+    if save_checkpoint:
+        import os
+        os.makedirs(checkpoint_dir, exist_ok=True)
+    
+    # Инициализация истории
+    history = {
+        'train_losses': [],
+        'test_losses': [],
+        'train_accs': [],
+        'test_accs': [],
+        'best_test_acc': 0.0,
+        'best_epoch': 0,
+    }
+    
+    best_test_loss = float('inf')
+    
+    # Главный цикл обучения
+    for epoch in range(num_epochs):
+        # ==================== ОБУЧЕНИЕ ====================
+        model.train()
+        train_loss = 0.0
+        train_correct = 0
+        train_total = 0
+        
+        train_pbar = tqdm(
+            train_loader,
+            desc=f"Epoch {epoch + 1}/{num_epochs} [Train]",
+            disable=not verbose
+        )
+        
+        for batch_idx, (inputs, targets) in enumerate(train_pbar):
+            inputs, targets = inputs.to(device), targets.to(device)
+            
+            # Forward pass
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+            
+            # Backward pass
+            loss.backward()
+            optimizer.step()
+            
+            # Статистика
+            train_loss += loss.item()
+            _, predicted = outputs.max(1)
+            train_total += targets.size(0)
+            train_correct += predicted.eq(targets).sum().item()
+            
+            # Обновить progressbar
+            train_pbar.set_postfix({
+                'loss': f'{loss.item():.4f}',
+                'acc': f'{100. * train_correct / train_total:.2f}%'
+            })
+        
+        # Средние значения для эпохи
+        avg_train_loss = train_loss / len(train_loader)
+        train_acc = 100. * train_correct / train_total
+        history['train_losses'].append(avg_train_loss)
+        history['train_accs'].append(train_acc)
+        
+        # ==================== ВАЛИДАЦИЯ ====================
+        model.eval()
+        test_loss = 0.0
+        test_correct = 0
+        test_total = 0
+        
+        test_pbar = tqdm(
+            test_loader,
+            desc=f"Epoch {epoch + 1}/{num_epochs} [Test]",
+            disable=not verbose
+        )
+        
+        with torch.no_grad():
+            for batch_idx, (inputs, targets) in enumerate(test_pbar):
+                inputs, targets = inputs.to(device), targets.to(device)
+                
+                outputs = model(inputs)
+                loss = criterion(outputs, targets)
+                
+                test_loss += loss.item()
+                _, predicted = outputs.max(1)
+                test_total += targets.size(0)
+                test_correct += predicted.eq(targets).sum().item()
+                
+                test_pbar.set_postfix({
+                    'loss': f'{loss.item():.4f}',
+                    'acc': f'{100. * test_correct / test_total:.2f}%'
+                })
+        
+        # Средние значения для эпохи
+        avg_test_loss = test_loss / len(test_loader)
+        test_acc = 100. * test_correct / test_total
+        history['test_losses'].append(avg_test_loss)
+        history['test_accs'].append(test_acc)
+        
+        # ==================== SCHEDULER ====================
+        if scheduler is not None:
+            scheduler.step()
+            if verbose:
+                current_lr = scheduler.get_last_lr()[0]
+                print(f"Learning rate: {current_lr:.6f}")
+        
+        # ==================== СОХРАНЕНИЕ ЛУЧШЕЙ МОДЕЛИ ====================
+        if save_checkpoint and avg_test_loss < best_test_loss:
+            best_test_loss = avg_test_loss
+            history['best_test_acc'] = test_acc
+            history['best_epoch'] = epoch + 1
+            
+            checkpoint_path = f"{checkpoint_dir}/best_moe_model.pth"
+            torch.save(model.state_dict(), checkpoint_path)
+            
+            if verbose:
+                print(f"✅ Best model saved to {checkpoint_path}")
+        
+        # ==================== ЛОГИРОВАНИЕ ====================
+        if verbose:
+            print(f"\nEpoch {epoch + 1}/{num_epochs}")
+            print(f"  Train Loss: {avg_train_loss:.6f} | Train Acc: {train_acc:.2f}%")
+            print(f"  Test Loss:  {avg_test_loss:.6f} | Test Acc:  {test_acc:.2f}%")
+            print("-" * 70)
+    
+    # === Загрузить лучшую модель ===
+    if save_checkpoint:
+        checkpoint_path = f"{checkpoint_dir}/best_moe_model.pth"
+        model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+        if verbose:
+            print(f"\n✅ Loaded best model from {checkpoint_path}")
+    
+    if verbose:
+        print(f"\n{'=' * 70}")
+        print(f"Training completed!")
+        print(f"Best test accuracy: {history['best_test_acc']:.2f}% (Epoch {history['best_epoch']})")
+        print(f"{'=' * 70}")
+    
+    return history
+
+
+# ==================== ДОПОЛНИТЕЛЬНЫЕ УТИЛИТЫ ====================
+
+def plot_training_history(
+    history
+):
+    plt.figure(figsize=(8, 5))
+    plt.plot(history['train'], label='train')
+    plt.plot(history['test'], label='test')
+    plt.xlabel('epoch')
+    plt.ylabel('MSE loss')
+    plt.title('Surrogate training')
+    plt.yscale('log')
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+
+def print_training_summary(history):
+    """Выводит сводку результатов обучения."""
+    print("\n" + "=" * 70)
+    print("TRAINING SUMMARY")
+    print("=" * 70)
+    print(f"Total epochs: {len(history['train_losses'])}")
+    print(f"\nFinal metrics:")
+    print(f"  Train Loss: {history['train_losses'][-1]:.6f}")
+    print(f"  Test Loss:  {history['test_losses'][-1]:.6f}")
+    print(f"  Train Acc:  {history['train_accs'][-1]:.2f}%")
+    print(f"  Test Acc:   {history['test_accs'][-1]:.2f}%")
+    print(f"\nBest metrics:")
+    print(f"  Best Test Acc:  {history['best_test_acc']:.2f}%")
+    print(f"  Best Epoch:     {history['best_epoch']}")
+    print("=" * 70 + "\n")

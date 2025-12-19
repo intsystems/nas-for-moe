@@ -195,6 +195,7 @@ class GAT(nn.Module):
         self.fc_drop = nn.Dropout(dropout)
         self.fc2 = nn.Linear(self.hidden_dim, output_dim)
 
+
     def forward(self, x, edge_index, batch):
         h1 = self.block1(x, edge_index, batch)
         h2 = self.block2(h1, edge_index, batch)
