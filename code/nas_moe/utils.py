@@ -185,6 +185,12 @@ def train_surrogate_with_val(surr: torch.nn.Module,
     optimizer = torch.optim.Adam(surr.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = torch.nn.MSELoss()
     history = {'train': [], 'test': []}
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer,
+        T_0=10,
+        T_mult=2,
+        eta_min=lr * 0.01
+    )
 
     surr.to(device)
     if verbose:
@@ -200,6 +206,7 @@ def train_surrogate_with_val(surr: torch.nn.Module,
             optimizer.zero_grad()
             out = surr(batch.x, batch.edge_index, batch.batch)
             loss = criterion(out, batch.y)
+            # print(batch.y)
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
@@ -212,6 +219,8 @@ def train_surrogate_with_val(surr: torch.nn.Module,
         history['train'].append(train_loss)
         history['test'].append(test_loss if test_loss is not None else float('nan'))
 
+        scheduler.step()
+
         if verbose:
             if test_loss is not None:
                 print(f"Epoch {epoch}/{epochs}  train_loss={train_loss:.6f}  test_loss={test_loss:.6f}")
@@ -221,19 +230,6 @@ def train_surrogate_with_val(surr: torch.nn.Module,
         if checkpoint_path:
             torch.save({'epoch': epoch, 'model_state': surr.state_dict(),
                         'optimizer_state': optimizer.state_dict()}, checkpoint_path)
-
-    # plt.figure(figsize=(8, 5))
-    # plt.plot(history['train'], label='train')
-    # if test_loader is not None:
-    #     plt.plot(history['test'], label='test')
-    # plt.xlabel('epoch')
-    # plt.ylabel('MSE loss')
-    # plt.title('Surrogate training')
-    # plt.yscale('log')
-    # plt.grid(True)
-    # plt.legend()
-    # plt.tight_layout()
-    # plt.show()
 
     return history
 
@@ -391,6 +387,10 @@ def train_model(
 
 
 # ==================== ДОПОЛНИТЕЛЬНЫЕ УТИЛИТЫ ====================
+
+def inference_one(surr, data):
+    out = surr(data.x, data.edge_index, data.batch)
+    return out
 
 def plot_training_history(
     history

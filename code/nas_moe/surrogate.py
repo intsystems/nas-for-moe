@@ -123,16 +123,13 @@ class GAT(nn.Module):
         output_dim: int = 16,
         dropout: float = 0.5,
         heads: int = 4,
-        output_activation: str = "none",
-        pooling: str = "attn",
         edge_dropout: float = 0.1,
         pre_norm: bool = True,
+        hidden_dim = 64
     ):
         super().__init__()
-        self.hidden_dim = 64
+        self.hidden_dim = hidden_dim
         self.output_dim = output_dim
-        self.output_activation = output_activation
-        self.pooling = pooling
 
         act = nn.ELU()
 
@@ -147,24 +144,6 @@ class GAT(nn.Module):
         )
         self.block2 = GATBlock(
             self.hidden_dim,
-            256,
-            heads=heads,
-            dropout=dropout,
-            edge_dropout=edge_dropout,
-            pre_norm=pre_norm,
-            activation=act,
-        )
-        self.block3 = GATBlock(
-            256,
-            256,
-            heads=heads,
-            dropout=dropout,
-            edge_dropout=edge_dropout,
-            pre_norm=pre_norm,
-            activation=act,
-        )
-        self.block4 = GATBlock(
-            256,
             self.hidden_dim,
             heads=heads,
             dropout=dropout,
@@ -182,12 +161,10 @@ class GAT(nn.Module):
             return AttentionalAggregation(gate_nn)
 
         self.attn1 = make_attn_pool(self.hidden_dim)  # 64
-        self.attn2 = make_attn_pool(256)
-        self.attn3 = make_attn_pool(256)
-        self.attn4 = make_attn_pool(self.hidden_dim)  # 64
+        self.attn2 = make_attn_pool(self.hidden_dim)  # 64
 
         self.jk_proj = nn.Linear(
-            self.hidden_dim + 256 + 256 + self.hidden_dim, self.hidden_dim
+            self.hidden_dim + self.hidden_dim, self.hidden_dim
         )
 
         self.fc1 = nn.Linear(self.hidden_dim, self.hidden_dim)
@@ -199,36 +176,11 @@ class GAT(nn.Module):
     def forward(self, x, edge_index, batch):
         h1 = self.block1(x, edge_index, batch)
         h2 = self.block2(h1, edge_index, batch)
-        h3 = self.block3(h2, edge_index, batch)
-        h4 = self.block4(h3, edge_index, batch)
 
-        if self.pooling == "attn":
-            p1 = self.attn1(h1, batch)
-            p2 = self.attn2(h2, batch)
-            p3 = self.attn3(h3, batch)
-            p4 = self.attn4(h4, batch)
-        elif self.pooling in {"max", "mean", "sum"}:
-            from torch_geometric.nn import (
-                global_max_pool,
-                global_mean_pool,
-                global_add_pool,
-            )
+        p1 = self.attn1(h1, batch)
+        p2 = self.attn2(h2, batch)
 
-            pool_fn = {
-                "max": global_max_pool,
-                "mean": global_mean_pool,
-                "sum": global_add_pool,
-            }[self.pooling]
-            p1 = pool_fn(h1, batch)
-            p2 = pool_fn(h2, batch)
-            p3 = pool_fn(h3, batch)
-            p4 = pool_fn(h4, batch)
-        else:
-            raise ValueError(
-                "Unsupported pooling method. Use 'attn', 'max', 'mean' or 'sum'."
-            )
-
-        hg = torch.cat([p1, p2, p3, p4], dim=-1)
+        hg = torch.cat([p1, p2], dim=-1)
         hg = self.jk_proj(hg)
 
         out = self.fc1(hg)
@@ -237,14 +189,78 @@ class GAT(nn.Module):
         out = self.fc_drop(out)
         out = self.fc2(out)
 
-        if self.output_activation == "sigmoid" and self.output_dim == 1:
-            return torch.sigmoid(out)
-        elif self.output_activation == "softmax":
-            return F.log_softmax(out, dim=-1)
-        elif self.output_activation == "l2":
-            return F.normalize(out, p=2, dim=-1)
-        else:
-            return out
+        # if self.output_activation == "sigmoid" and self.output_dim == 1:
+        #     return torch.sigmoid(out)
+        # elif self.output_activation == "softmax":
+        #     return F.log_softmax(out, dim=-1)
+        # elif self.output_activation == "l2":
+        #     return F.normalize(out, p=2, dim=-1)
+        # else:
+        return out
+        
+class GAT_Datafeature(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int = 16,
+        dropout: float = 0.5,
+        heads: int = 4,
+        edge_dropout: float = 0.1,
+        pre_norm: bool = True,
+        hidden_dim: int = 64,
+        bool_vec_dim: int = 2,
+    ):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+
+        act = nn.ELU()
+
+        # Graph processing через существующий GAT
+        self.gat_model = GAT(
+            input_dim=input_dim,
+            output_dim=self.hidden_dim,  # GAT выдает hidden_dim вместо output_dim
+            dropout=dropout,
+            heads=heads,
+            edge_dropout=edge_dropout,
+            pre_norm=pre_norm,
+            hidden_dim=hidden_dim,
+        )
+
+        self.bool_encoder = nn.Sequential(
+            nn.Linear(bool_vec_dim, hidden_dim * 2),
+            nn.ELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.ELU(),
+        )
+        # Fusion layer
+        self.fusion = nn.Sequential(
+            nn.Linear(self.hidden_dim * 2, self.hidden_dim),
+            nn.LayerNorm(self.hidden_dim),
+            nn.ELU(),
+            nn.Dropout(dropout),
+        )
+        
+        # Final output layer
+        self.output_layer = nn.Linear(self.hidden_dim, output_dim)
+
+    def forward(self, x, edge_index, batch, bool_vec):
+        # Graph processing через GAT
+        hg = self.gat_model(x, edge_index, batch)  # [batch_size, hidden_dim]
+
+        # bool_vec: [batch_size, bool_vec_dim], dtype=torch.long
+        bool_features = self.bool_encoder(bool_vec)
+        
+        # Fusion
+        combined = torch.cat([hg, bool_features], dim=-1)
+        out = self.fusion(combined)
+
+        # Final output
+        out = self.output_layer(out)
+
+        return out
+
 
 
 # ВАЖНО: функция должна быть в глобальной области, чтобы multiprocessing мог её сериализовать

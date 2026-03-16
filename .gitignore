@@ -47,6 +47,7 @@ share/python-wheels/
 MANIFEST
 
 *.pth
+active_datset
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
