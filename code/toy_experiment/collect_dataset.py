@@ -616,24 +616,41 @@ def active_learning_loop(
     observation_paths: List[Path] = []
     obs_index = 0
 
+    # --- Resume from existing observations if any ---
+    existing = sorted(Path(save_dir).glob("obs_*.json"))
+    if existing:
+        observation_paths = list(existing)
+        # Parse highest index
+        obs_index = max(
+            int(p.stem.split("_")[1]) for p in existing
+        ) + 1
+        if verbose:
+            print(f"  Resuming from {len(observation_paths)} existing observations "
+                  f"(next index: {obs_index})")
+
     # =================================================================
     # ФАЗА 1: Seed-датасет — случайные (архитектура, b)
     # =================================================================
-    if verbose:
-        print(f"\n=== Phase 1: Collecting {n_initial} seed observations ===")
+    n_seed_needed = max(0, n_initial - len(observation_paths))
+    if n_seed_needed > 0:
+        if verbose:
+            print(f"\n=== Phase 1: Collecting {n_seed_needed} seed observations ===")
 
-    for i in tqdm(range(n_initial), desc="Seed", disable=not verbose):
-        config = sample_valid_config(ss)
-        b = sample_random_b(n_clusters)
-        val_acc = evaluate_architecture_on_subset(
-            config, ss, b,
-            X_train_by_cluster, y_train_by_cluster,
-            X_val, y_val,
-            epochs=cell_train_epochs,
-        )
-        path = save_observation(config, b, val_acc, save_dir, obs_index)
-        observation_paths.append(path)
-        obs_index += 1
+        for i in tqdm(range(n_seed_needed), desc="Seed", disable=not verbose):
+            config = sample_valid_config(ss)
+            b = sample_random_b(n_clusters)
+            val_acc = evaluate_architecture_on_subset(
+                config, ss, b,
+                X_train_by_cluster, y_train_by_cluster,
+                X_val, y_val,
+                epochs=cell_train_epochs,
+            )
+            path = save_observation(config, b, val_acc, save_dir, obs_index)
+            observation_paths.append(path)
+            obs_index += 1
+    else:
+        if verbose:
+            print(f"\n  Seed phase skipped ({len(observation_paths)} >= {n_initial})")
 
     if verbose:
         print(f"Seed dataset: {len(observation_paths)} observations\n")
