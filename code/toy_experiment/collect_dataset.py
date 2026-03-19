@@ -51,6 +51,10 @@ CODE_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
 import toy_searchspace
 from toy_graph import Graph, OPS
 from toy_dataset import ArchSubsetACCDataset
@@ -627,6 +631,7 @@ def active_learning_loop(
     if verbose:
         print(f"\n=== Готово. Собрано {len(observation_paths)} наблюдений ===")
 
+    # Финальное обучение суррогата на всём собранном датасете
     dataset = ArchSubsetACCDataset(observation_paths)
     loader = DataLoader(
         dataset, batch_size=32, shuffle=True, collate_fn=collate_graphs
@@ -637,7 +642,117 @@ def active_learning_loop(
         hidden_dim=8, heads=1, bool_vec_dim=n_clusters,
     )
 
-    return observation_paths, surr
+    if verbose:
+        print("  Финальное обучение суррогата на всём датасете...")
+
+    final_history = train_surrogate(
+        surr, loader,
+        device=device,
+        lr=surrogate_lr,
+        epochs=surrogate_epochs,
+        verbose=False,
+    )
+
+    return observation_paths, surr, final_history
+
+
+# =========================================================================
+# 9. Evaluation & Plotting
+# =========================================================================
+
+def evaluate_and_plot(
+    surrogate: nn.Module,
+    observation_paths: List[Path],
+    n_clusters: int,
+    device: str = "cpu",
+    history: Optional[dict] = None,
+    save_dir: str = "./active_dataset",
+):
+    """Evaluate surrogate on collected data and save diagnostic plots."""
+    import os
+    os.makedirs(save_dir, exist_ok=True)
+
+    dataset = ArchSubsetACCDataset(observation_paths)
+    loader = DataLoader(
+        dataset, batch_size=32, shuffle=False, collate_fn=collate_graphs
+    )
+
+    surrogate.to(device)
+    surrogate.eval()
+
+    all_true = []
+    all_pred = []
+
+    with torch.no_grad():
+        for batch in loader:
+            batch = batch.to(device)
+            out = surrogate(batch.x, batch.edge_index, batch.batch, batch.bool_vector)
+            all_pred.append(out.cpu().numpy())
+            all_true.append(batch.y.cpu().numpy())
+
+    all_true = np.concatenate(all_true).flatten()
+    all_pred = np.concatenate(all_pred).flatten()
+
+    # Metrics
+    from scipy.stats import spearmanr
+    mae = np.mean(np.abs(all_true - all_pred))
+    rmse = np.sqrt(np.mean((all_true - all_pred) ** 2))
+    ss_res = np.sum((all_true - all_pred) ** 2)
+    ss_tot = np.sum((all_true - np.mean(all_true)) ** 2)
+    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+    spearman, _ = spearmanr(all_true, all_pred)
+
+    print(f"\n=== Surrogate evaluation ===")
+    print(f"  N samples : {len(all_true)}")
+    print(f"  MAE       : {mae:.4f}")
+    print(f"  RMSE      : {rmse:.4f}")
+    print(f"  R2        : {r2:.4f}")
+    print(f"  Spearman  : {spearman:.4f}")
+
+    # --- Plot 1: Training loss curve ---
+    if history and "train" in history:
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax.plot(history["train"], linewidth=1.5)
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("MSE Loss")
+        ax.set_title("Surrogate Training Loss (final retraining)")
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        path1 = os.path.join(save_dir, "surrogate_loss.png")
+        fig.savefig(path1, dpi=150)
+        plt.close(fig)
+        print(f"  Saved: {path1}")
+
+    # --- Plot 2: Predicted vs True scatter ---
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.scatter(all_true, all_pred, alpha=0.5, s=15, edgecolors="none")
+    lo = min(all_true.min(), all_pred.min())
+    hi = max(all_true.max(), all_pred.max())
+    ax.plot([lo, hi], [lo, hi], "r--", linewidth=1, label="ideal")
+    ax.set_xlabel("True val accuracy")
+    ax.set_ylabel("Predicted val accuracy")
+    ax.set_title(f"Surrogate: pred vs true  (R2={r2:.3f}, Spearman={spearman:.3f})")
+    ax.legend()
+    ax.set_aspect("equal", adjustable="box")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    path2 = os.path.join(save_dir, "surrogate_pred_vs_true.png")
+    fig.savefig(path2, dpi=150)
+    plt.close(fig)
+    print(f"  Saved: {path2}")
+
+    # --- Plot 3: Distribution of true accuracies ---
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.hist(all_true, bins=30, alpha=0.7, edgecolor="black", linewidth=0.5)
+    ax.set_xlabel("Val accuracy")
+    ax.set_ylabel("Count")
+    ax.set_title("Distribution of collected val accuracies")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    path3 = os.path.join(save_dir, "accuracy_distribution.png")
+    fig.savefig(path3, dpi=150)
+    plt.close(fig)
+    print(f"  Saved: {path3}")
 
 
 # =========================================================================
@@ -683,7 +798,7 @@ def main():
     X = np.load(data_dir / "data_X.npy")
     y = np.load(data_dir / "data_y.npy")
 
-    observation_paths, final_surrogate = active_learning_loop(
+    observation_paths, final_surrogate, final_history = active_learning_loop(
         X=X,
         y=y,
         n_clusters=args.n_clusters,
@@ -702,8 +817,14 @@ def main():
     )
 
     torch.save(final_surrogate.state_dict(), args.checkpoint_path)
-
     print(f"\nСобрано {len(observation_paths)} наблюдений в {args.save_dir}")
+
+    # --- Evaluation & Plotting ---
+    evaluate_and_plot(
+        final_surrogate, observation_paths, args.n_clusters,
+        device=args.device, history=final_history,
+        save_dir=args.save_dir,
+    )
 
 
 if __name__ == "__main__":
