@@ -398,39 +398,74 @@ def compute_ucb_score(
 
 
 # =========================================================================
-# 7. Обучение суррогатной модели
+# 7. Обучение суррогатной модели (с train/val split)
 # =========================================================================
 
 def collate_graphs(batch):
     return Batch.from_data_list(batch)
 
 
+def make_surrogate_loaders(
+    observation_paths: List[Path],
+    val_fraction: float = 0.2,
+    batch_size: int = 32,
+    seed: int = SEED,
+) -> Tuple[DataLoader, DataLoader]:
+    """Split observation paths into train/val and return DataLoaders."""
+    n = len(observation_paths)
+    indices = list(range(n))
+    rng = random.Random(seed)
+    rng.shuffle(indices)
+    n_val = max(1, int(n * val_fraction))
+    val_indices = set(indices[:n_val])
+    train_paths = [observation_paths[i] for i in range(n) if i not in val_indices]
+    val_paths = [observation_paths[i] for i in range(n) if i in val_indices]
+
+    train_dataset = ArchSubsetACCDataset(train_paths)
+    val_dataset = ArchSubsetACCDataset(val_paths)
+
+    train_loader = DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_graphs
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_graphs
+    )
+    return train_loader, val_loader
+
+
 def train_surrogate(
     surrogate: nn.Module,
     train_loader: DataLoader,
+    val_loader: Optional[DataLoader] = None,
     device: str = "cpu",
     lr: float = 3e-3,
-    epochs: int = 120,
-    weight_decay: float = 1e-5,
+    epochs: int = 200,
+    weight_decay: float = 1e-4,
+    patience: int = 30,
     verbose: bool = False,
 ) -> dict:
-    """Обучить суррогатную модель. Вернуть историю loss."""
+    """Обучить суррогатную модель с optional early stopping. Вернуть историю loss."""
     optimizer = torch.optim.Adam(
         surrogate.parameters(), lr=lr, weight_decay=weight_decay
     )
     criterion = nn.MSELoss()
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer, T_0=10, T_mult=2, eta_min=lr * 0.01
+        optimizer, T_0=20, T_mult=2, eta_min=lr * 0.01
     )
 
     surrogate.to(device)
-    history = {"train": []}
+    history = {"train": [], "val": []}
+
+    best_val_loss = float("inf")
+    best_state = None
+    epochs_no_improve = 0
 
     iterator = range(1, epochs + 1)
     if not verbose:
-        iterator = tqdm(iterator, desc="  Обучение суррогата")
+        iterator = tqdm(iterator, desc="  Surrogate training")
 
     for epoch in iterator:
+        # --- Train ---
         surrogate.train()
         total_loss = 0.0
         n_batches = 0
@@ -445,14 +480,67 @@ def train_surrogate(
             total_loss += loss.item()
             n_batches += 1
 
-        avg_loss = total_loss / max(1, n_batches)
-        history["train"].append(avg_loss)
+        avg_train_loss = total_loss / max(1, n_batches)
+        history["train"].append(avg_train_loss)
         scheduler.step()
 
-        if verbose and epoch % 20 == 0:
-            print(f"    Epoch {epoch}/{epochs}  train_loss={avg_loss:.6f}")
+        # --- Val ---
+        if val_loader is not None:
+            surrogate.eval()
+            val_loss = 0.0
+            n_val = 0
+            with torch.no_grad():
+                for batch in val_loader:
+                    batch = batch.to(device)
+                    out = surrogate(
+                        batch.x, batch.edge_index, batch.batch, batch.bool_vector
+                    )
+                    val_loss += criterion(out, batch.y).item()
+                    n_val += 1
+            avg_val_loss = val_loss / max(1, n_val)
+            history["val"].append(avg_val_loss)
+
+            # Early stopping
+            if avg_val_loss < best_val_loss:
+                best_val_loss = avg_val_loss
+                best_state = {k: v.cpu().clone() for k, v in surrogate.state_dict().items()}
+                epochs_no_improve = 0
+            else:
+                epochs_no_improve += 1
+
+            if epochs_no_improve >= patience:
+                if verbose:
+                    print(f"    Early stopping at epoch {epoch} "
+                          f"(val_loss={avg_val_loss:.6f}, best={best_val_loss:.6f})")
+                break
+
+            if verbose and epoch % 20 == 0:
+                print(f"    Epoch {epoch}/{epochs}  "
+                      f"train={avg_train_loss:.6f}  val={avg_val_loss:.6f}")
+        else:
+            if verbose and epoch % 20 == 0:
+                print(f"    Epoch {epoch}/{epochs}  train_loss={avg_train_loss:.6f}")
+
+    # Restore best model if we have validation
+    if best_state is not None:
+        surrogate.load_state_dict(best_state)
+        surrogate.to(device)
 
     return history
+
+
+def create_surrogate(
+    n_features: int,
+    n_clusters: int,
+    dropout: float = 0.3,
+    hidden_dim: int = 16,
+    heads: int = 2,
+) -> nn.Module:
+    """Create a GAT_Datafeature surrogate model."""
+    return nas_moe.surrogate.GAT_Datafeature(
+        n_features, 1, dropout,
+        hidden_dim=hidden_dim, heads=heads, bool_vec_dim=n_clusters,
+    )
 
 
 # =========================================================================
@@ -468,14 +556,20 @@ def active_learning_loop(
     input_dim: int = 2,
     num_nodes_per_cell: int = 4,
     # Active learning
-    n_initial: int = 50,
-    n_iterations: int = 200,
-    n_candidates: int = 100,
+    n_initial: int = 100,
+    n_total: int = 1000,
+    n_candidates: int = 50,
     n_b_per_iter: int = 5,
-    n_mc_forward: int = 30,
+    n_mc_forward: int = 20,
+    retrain_every: int = 15,
     # Суррогат
-    surrogate_epochs: int = 120,
+    surrogate_dropout: float = 0.3,
+    surrogate_hidden_dim: int = 16,
+    surrogate_heads: int = 2,
+    surrogate_epochs: int = 200,
     surrogate_lr: float = 3e-3,
+    surrogate_val_fraction: float = 0.2,
+    surrogate_patience: int = 30,
     # Обучение ячеек
     cell_train_epochs: int = 100,
     # IO
@@ -489,17 +583,14 @@ def active_learning_loop(
     Фаза 1 (seed):
         Сэмплируем n_initial случайных пар (архитектура, b), обучаем, сохраняем.
 
-    Фаза 2 (active, n_iterations итераций):
-        a. Обучить суррогат на текущем датасете.
-        b. Сэмплировать набор b-векторов.
-        c. Для каждого b сгенерировать n_candidates архитектур.
-        d. Для каждого (архитектура, b) вычислить UCB = mu + sigma через MC Dropout.
-        e. Выбрать пару (архитектура, b) с наибольшим UCB.
-        f. Реально обучить, сохранить, добавить в датасет.
+    Фаза 2 (active):
+        Собираем наблюдения до n_total. Суррогат переобучается каждые retrain_every
+        новых наблюдений. Между переобучениями используем текущий суррогат для UCB.
 
     Возвращает:
         observation_paths: List[Path] — пути ко всем сохранённым наблюдениям.
         final_surrogate: nn.Module    — последняя обученная суррогатная модель.
+        final_history: dict           — история финального обучения суррогата.
     """
     set_seed(SEED)
     os.makedirs(save_dir, exist_ok=True)
@@ -513,8 +604,8 @@ def active_learning_loop(
 
     if verbose:
         for k in range(n_clusters):
-            print(f"  Кластер {k}: {len(X_train_by_cluster[k])} train, "
-                  f"{(data['val_cluster_ids'] == k).sum()} val точек")
+            print(f"  Cluster {k}: {len(X_train_by_cluster[k])} train, "
+                  f"{(data['val_cluster_ids'] == k).sum()} val points")
 
     # --- Пространство поиска ---
     ss = toy_searchspace.ToySearchSpace(
@@ -529,7 +620,7 @@ def active_learning_loop(
     # ФАЗА 1: Seed-датасет — случайные (архитектура, b)
     # =================================================================
     if verbose:
-        print(f"\n=== Фаза 1: Сбор {n_initial} начальных наблюдений ===")
+        print(f"\n=== Phase 1: Collecting {n_initial} seed observations ===")
 
     for i in tqdm(range(n_initial), desc="Seed", disable=not verbose):
         config = sample_valid_config(ss)
@@ -545,57 +636,75 @@ def active_learning_loop(
         obs_index += 1
 
     if verbose:
-        print(f"Seed-датасет: {len(observation_paths)} наблюдений\n")
+        print(f"Seed dataset: {len(observation_paths)} observations\n")
 
     # =================================================================
     # ФАЗА 2: Active learning
     # =================================================================
+    remaining = n_total - n_initial
     if verbose:
-        print(f"=== Фаза 2: Active learning ({n_iterations} итераций) ===")
+        print(f"=== Phase 2: Active learning ({remaining} more observations) ===")
+        print(f"  Surrogate: dropout={surrogate_dropout}, hidden={surrogate_hidden_dim}, "
+              f"heads={surrogate_heads}")
+        print(f"  Retrain every {retrain_every} observations")
 
-    surr = None  # последняя обученная модель
+    surr = None
+    new_since_retrain = retrain_every  # force initial training
+    surr_train_count = 0
 
-    for iteration in range(n_iterations):
-        if verbose:
-            print(f"\n--- Итерация {iteration + 1}/{n_iterations} ---")
+    pbar = tqdm(total=remaining, desc="Active", disable=not verbose)
 
-        # 2a. Построить датасет наблюдений и обучить суррогат
-        dataset = ArchSubsetACCDataset(observation_paths)
-        loader = DataLoader(
-            dataset, batch_size=32, shuffle=True, collate_fn=collate_graphs
-        )
+    while len(observation_paths) < n_total:
+        # --- Retrain surrogate if needed ---
+        if new_since_retrain >= retrain_every:
+            surr_train_count += 1
+            if verbose:
+                print(f"\n  [Surrogate retrain #{surr_train_count}] "
+                      f"on {len(observation_paths)} observations...")
 
-        surr = nas_moe.surrogate.GAT_Datafeature(
-            n_features, 1, 0.8,
-            hidden_dim=8, heads=1, bool_vec_dim=n_clusters,
-        )
+            train_loader, val_loader = make_surrogate_loaders(
+                observation_paths,
+                val_fraction=surrogate_val_fraction,
+                seed=SEED + surr_train_count,
+            )
 
-        if verbose:
-            print("  Обучаем суррогат...")
+            surr = create_surrogate(
+                n_features, n_clusters,
+                dropout=surrogate_dropout,
+                hidden_dim=surrogate_hidden_dim,
+                heads=surrogate_heads,
+            )
 
-        train_surrogate(
-            surr, loader,
-            device=device,
-            lr=surrogate_lr,
-            epochs=surrogate_epochs,
-            verbose=False,
-        )
+            history = train_surrogate(
+                surr, train_loader, val_loader,
+                device=device,
+                lr=surrogate_lr,
+                epochs=surrogate_epochs,
+                patience=surrogate_patience,
+                verbose=False,
+            )
 
-        # 2b. Сэмплировать b-вектора
+            if verbose:
+                final_train = history["train"][-1]
+                final_val = history["val"][-1] if history["val"] else float("nan")
+                print(f"  Surrogate trained for {len(history['train'])} epochs: "
+                      f"train_loss={final_train:.6f}, val_loss={final_val:.6f}")
+
+            new_since_retrain = 0
+            surr.to(device)
+
+        # --- Sample b-vectors ---
         b_vectors = sample_b_vectors(n_clusters, n_b_per_iter)
 
-        # 2c-d. Для каждого b сгенерировать кандидатов и оценить UCB
-        if verbose:
-            print(f"({len(b_vectors)} b-векторов × {n_candidates} архитектур, "
-                  f"MC Dropout {n_mc_forward} проходов)...")
-
-        surr.to(device)
-
+        # --- For each b, find best architecture by UCB ---
         for b in b_vectors:
-            best_config = None
-            best_score = -float("inf")
+            if len(observation_paths) >= n_total:
+                break
+
             candidates = [sample_valid_config(ss) for _ in range(n_candidates)]
 
+            best_config = None
+            best_score = -float("inf")
             for config in candidates:
                 score = compute_ucb_score(
                     surr, config, b,
@@ -604,12 +713,8 @@ def active_learning_loop(
                 if score > best_score:
                     best_score = score
                     best_config = config
-                    # best_b = b
 
-            if verbose:
-                print(f"  Лучший кандидат: UCB={best_score:.6f}, b={b}")
-
-            # 2e. Реально обучить лучшего кандидата
+            # Evaluate best candidate
             val_acc = evaluate_architecture_on_subset(
                 best_config, ss, b,
                 X_train_by_cluster, y_train_by_cluster,
@@ -617,40 +722,47 @@ def active_learning_loop(
                 epochs=cell_train_epochs,
             )
 
-            if verbose:
-                print(f"  Реальная val accuracy: {val_acc:.4f}")
-
-            # 2f. Сохранить и добавить в датасет
             path = save_observation(best_config, b, val_acc, save_dir, obs_index)
             observation_paths.append(path)
             obs_index += 1
+            new_since_retrain += 1
+            pbar.update(1)
 
-            if verbose:
-                print(f"  Всего наблюдений: {len(observation_paths)}")
+            if verbose and len(observation_paths) % 50 == 0:
+                print(f"  [{len(observation_paths)}/{n_total}] "
+                      f"UCB={best_score:.4f}, acc={val_acc:.4f}, b={b}")
 
-    if verbose:
-        print(f"\n=== Готово. Собрано {len(observation_paths)} наблюдений ===")
-
-    # Финальное обучение суррогата на всём собранном датасете
-    dataset = ArchSubsetACCDataset(observation_paths)
-    loader = DataLoader(
-        dataset, batch_size=32, shuffle=True, collate_fn=collate_graphs
-    )
-
-    surr = nas_moe.surrogate.GAT_Datafeature(
-        n_features, 1, 0.8,
-        hidden_dim=8, heads=1, bool_vec_dim=n_clusters,
-    )
+    pbar.close()
 
     if verbose:
-        print("  Финальное обучение суррогата на всём датасете...")
+        print(f"\n=== Done. Collected {len(observation_paths)} observations ===")
+
+    # =================================================================
+    # Final surrogate training on full dataset
+    # =================================================================
+    if verbose:
+        print("  Final surrogate training on all data...")
+
+    train_loader, val_loader = make_surrogate_loaders(
+        observation_paths,
+        val_fraction=surrogate_val_fraction,
+        seed=SEED,
+    )
+
+    surr = create_surrogate(
+        n_features, n_clusters,
+        dropout=surrogate_dropout,
+        hidden_dim=surrogate_hidden_dim,
+        heads=surrogate_heads,
+    )
 
     final_history = train_surrogate(
-        surr, loader,
+        surr, train_loader, val_loader,
         device=device,
         lr=surrogate_lr,
         epochs=surrogate_epochs,
-        verbose=False,
+        patience=surrogate_patience,
+        verbose=verbose,
     )
 
     return observation_paths, surr, final_history
@@ -669,72 +781,98 @@ def evaluate_and_plot(
     save_dir: str = "./active_dataset",
 ):
     """Evaluate surrogate on collected data and save diagnostic plots."""
-    import os
+    from scipy.stats import spearmanr
+
     os.makedirs(save_dir, exist_ok=True)
 
-    dataset = ArchSubsetACCDataset(observation_paths)
-    loader = DataLoader(
-        dataset, batch_size=32, shuffle=False, collate_fn=collate_graphs
+    # Use surrogate's val split for proper evaluation
+    _, val_loader = make_surrogate_loaders(
+        observation_paths, val_fraction=0.2, seed=SEED
+    )
+    # Also get full dataset for plotting
+    full_dataset = ArchSubsetACCDataset(observation_paths)
+    full_loader = DataLoader(
+        full_dataset, batch_size=64, shuffle=False, collate_fn=collate_graphs
     )
 
     surrogate.to(device)
     surrogate.eval()
 
-    all_true = []
-    all_pred = []
+    def collect_preds(loader):
+        true_all, pred_all = [], []
+        with torch.no_grad():
+            for batch in loader:
+                batch = batch.to(device)
+                out = surrogate(
+                    batch.x, batch.edge_index, batch.batch, batch.bool_vector
+                )
+                pred_all.append(out.cpu().numpy())
+                true_all.append(batch.y.cpu().numpy())
+        return np.concatenate(true_all).flatten(), np.concatenate(pred_all).flatten()
 
-    with torch.no_grad():
-        for batch in loader:
-            batch = batch.to(device)
-            out = surrogate(batch.x, batch.edge_index, batch.batch, batch.bool_vector)
-            all_pred.append(out.cpu().numpy())
-            all_true.append(batch.y.cpu().numpy())
+    val_true, val_pred = collect_preds(val_loader)
+    full_true, full_pred = collect_preds(full_loader)
 
-    all_true = np.concatenate(all_true).flatten()
-    all_pred = np.concatenate(all_pred).flatten()
+    def compute_metrics(y_true, y_pred):
+        mae = np.mean(np.abs(y_true - y_pred))
+        rmse = np.sqrt(np.mean((y_true - y_pred) ** 2))
+        ss_res = np.sum((y_true - y_pred) ** 2)
+        ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+        r2 = 1 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+        sp, _ = spearmanr(y_true, y_pred)
+        return {"MAE": mae, "RMSE": rmse, "R2": r2, "Spearman": sp}
 
-    # Metrics
-    from scipy.stats import spearmanr
-    mae = np.mean(np.abs(all_true - all_pred))
-    rmse = np.sqrt(np.mean((all_true - all_pred) ** 2))
-    ss_res = np.sum((all_true - all_pred) ** 2)
-    ss_tot = np.sum((all_true - np.mean(all_true)) ** 2)
-    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else float("nan")
-    spearman, _ = spearmanr(all_true, all_pred)
+    val_metrics = compute_metrics(val_true, val_pred)
+    full_metrics = compute_metrics(full_true, full_pred)
 
-    print(f"\n=== Surrogate evaluation ===")
-    print(f"  N samples : {len(all_true)}")
-    print(f"  MAE       : {mae:.4f}")
-    print(f"  RMSE      : {rmse:.4f}")
-    print(f"  R2        : {r2:.4f}")
-    print(f"  Spearman  : {spearman:.4f}")
+    print(f"\n=== Surrogate evaluation (VAL split, n={len(val_true)}) ===")
+    for k, v in val_metrics.items():
+        print(f"  {k:10s}: {v:.4f}")
 
-    # --- Plot 1: Training loss curve ---
+    print(f"\n=== Surrogate evaluation (FULL dataset, n={len(full_true)}) ===")
+    for k, v in full_metrics.items():
+        print(f"  {k:10s}: {v:.4f}")
+
+    # --- Plot 1: Training + Validation loss curve ---
     if history and "train" in history:
-        fig, ax = plt.subplots(figsize=(8, 5))
-        ax.plot(history["train"], linewidth=1.5)
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(history["train"], linewidth=1.5, label="Train loss", alpha=0.8)
+        if history.get("val"):
+            ax.plot(history["val"], linewidth=1.5, label="Val loss", alpha=0.8)
         ax.set_xlabel("Epoch")
         ax.set_ylabel("MSE Loss")
-        ax.set_title("Surrogate Training Loss (final retraining)")
+        ax.set_title("Surrogate Training Loss (final)")
+        ax.legend()
         ax.grid(True, alpha=0.3)
+        # Set y-limit to avoid outliers dominating
+        if history.get("val"):
+            median_val = np.median(history["val"])
+            ax.set_ylim(0, min(median_val * 3, max(history["val"])))
         fig.tight_layout()
         path1 = os.path.join(save_dir, "surrogate_loss.png")
         fig.savefig(path1, dpi=150)
         plt.close(fig)
         print(f"  Saved: {path1}")
 
-    # --- Plot 2: Predicted vs True scatter ---
-    fig, ax = plt.subplots(figsize=(6, 6))
-    ax.scatter(all_true, all_pred, alpha=0.5, s=15, edgecolors="none")
-    lo = min(all_true.min(), all_pred.min())
-    hi = max(all_true.max(), all_pred.max())
-    ax.plot([lo, hi], [lo, hi], "r--", linewidth=1, label="ideal")
-    ax.set_xlabel("True val accuracy")
-    ax.set_ylabel("Predicted val accuracy")
-    ax.set_title(f"Surrogate: pred vs true  (R2={r2:.3f}, Spearman={spearman:.3f})")
-    ax.legend()
-    ax.set_aspect("equal", adjustable="box")
-    ax.grid(True, alpha=0.3)
+    # --- Plot 2: Predicted vs True scatter (val split) ---
+    fig, axes = plt.subplots(1, 2, figsize=(13, 6))
+
+    for ax, (y_true, y_pred, title) in zip(axes, [
+        (val_true, val_pred, "Val split"),
+        (full_true, full_pred, "Full dataset"),
+    ]):
+        metrics = compute_metrics(y_true, y_pred)
+        ax.scatter(y_true, y_pred, alpha=0.4, s=12, edgecolors="none")
+        lo = min(y_true.min(), y_pred.min()) - 0.02
+        hi = max(y_true.max(), y_pred.max()) + 0.02
+        ax.plot([lo, hi], [lo, hi], "r--", linewidth=1, label="ideal")
+        ax.set_xlabel("True val accuracy")
+        ax.set_ylabel("Predicted val accuracy")
+        ax.set_title(f"{title}  (R2={metrics['R2']:.3f}, Sp={metrics['Spearman']:.3f})")
+        ax.legend(fontsize=9)
+        ax.set_aspect("equal", adjustable="box")
+        ax.grid(True, alpha=0.3)
+
     fig.tight_layout()
     path2 = os.path.join(save_dir, "surrogate_pred_vs_true.png")
     fig.savefig(path2, dpi=150)
@@ -743,16 +881,31 @@ def evaluate_and_plot(
 
     # --- Plot 3: Distribution of true accuracies ---
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.hist(all_true, bins=30, alpha=0.7, edgecolor="black", linewidth=0.5)
+    ax.hist(full_true, bins=30, alpha=0.7, edgecolor="black", linewidth=0.5)
     ax.set_xlabel("Val accuracy")
     ax.set_ylabel("Count")
-    ax.set_title("Distribution of collected val accuracies")
+    ax.set_title(f"Distribution of collected val accuracies (n={len(full_true)})")
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     path3 = os.path.join(save_dir, "accuracy_distribution.png")
     fig.savefig(path3, dpi=150)
     plt.close(fig)
     print(f"  Saved: {path3}")
+
+    # --- Plot 4: Residual plot ---
+    fig, ax = plt.subplots(figsize=(8, 5))
+    residuals = full_pred - full_true
+    ax.scatter(full_true, residuals, alpha=0.4, s=12, edgecolors="none")
+    ax.axhline(0, color="r", linestyle="--", linewidth=1)
+    ax.set_xlabel("True val accuracy")
+    ax.set_ylabel("Residual (pred - true)")
+    ax.set_title("Residual plot")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    path4 = os.path.join(save_dir, "surrogate_residuals.png")
+    fig.savefig(path4, dpi=150)
+    plt.close(fig)
+    print(f"  Saved: {path4}")
 
 
 # =========================================================================
@@ -770,20 +923,27 @@ def main():
     parser.add_argument("--n-clusters", type=int, default=2)
     parser.add_argument("--input-dim", type=int, default=2,
                         help="Размерность входа ячейки")
-    parser.add_argument("--n-initial", type=int, default=50,
+    parser.add_argument("--n-initial", type=int, default=100,
                         help="Число начальных случайных наблюдений")
-    parser.add_argument("--n-iterations", type=int, default=200,
-                        help="Число итераций active learning")
-    
-    parser.add_argument("--n-candidates", type=int, default=100,
+    parser.add_argument("--n-total", type=int, default=1000,
+                        help="Общее число наблюдений для сбора")
+
+    parser.add_argument("--n-candidates", type=int, default=50,
                         help="Число кандидатных архитектур на b-вектор")
-    parser.add_argument("--n-b-per-iter", type=int, default=2,
+    parser.add_argument("--n-b-per-iter", type=int, default=3,
                         help="Число b-векторов на итерацию (при K>5)")
-    parser.add_argument("--n-mc-forward", type=int, default=30,
+    parser.add_argument("--n-mc-forward", type=int, default=20,
                         help="Число MC Dropout forward-проходов")
-    
-    parser.add_argument("--surrogate-epochs", type=int, default=120)
+    parser.add_argument("--retrain-every", type=int, default=15,
+                        help="Переобучать суррогат каждые N новых наблюдений")
+
+    parser.add_argument("--surrogate-dropout", type=float, default=0.3)
+    parser.add_argument("--surrogate-hidden-dim", type=int, default=16)
+    parser.add_argument("--surrogate-heads", type=int, default=2)
+    parser.add_argument("--surrogate-epochs", type=int, default=200)
     parser.add_argument("--surrogate-lr", type=float, default=3e-3)
+    parser.add_argument("--surrogate-val-fraction", type=float, default=0.2)
+    parser.add_argument("--surrogate-patience", type=int, default=30)
     parser.add_argument("--checkpoint-path", type=str,
                         default="./surr.pth")
 
@@ -804,12 +964,18 @@ def main():
         n_clusters=args.n_clusters,
         input_dim=args.input_dim,
         n_initial=args.n_initial,
-        n_iterations=args.n_iterations,
+        n_total=args.n_total,
         n_candidates=args.n_candidates,
         n_b_per_iter=args.n_b_per_iter,
         n_mc_forward=args.n_mc_forward,
+        retrain_every=args.retrain_every,
+        surrogate_dropout=args.surrogate_dropout,
+        surrogate_hidden_dim=args.surrogate_hidden_dim,
+        surrogate_heads=args.surrogate_heads,
         surrogate_epochs=args.surrogate_epochs,
         surrogate_lr=args.surrogate_lr,
+        surrogate_val_fraction=args.surrogate_val_fraction,
+        surrogate_patience=args.surrogate_patience,
         cell_train_epochs=args.cell_train_epochs,
         save_dir=args.save_dir,
         device=args.device,
@@ -817,7 +983,8 @@ def main():
     )
 
     torch.save(final_surrogate.state_dict(), args.checkpoint_path)
-    print(f"\nСобрано {len(observation_paths)} наблюдений в {args.save_dir}")
+    print(f"\nCollected {len(observation_paths)} observations in {args.save_dir}")
+    print(f"Surrogate saved to {args.checkpoint_path}")
 
     # --- Evaluation & Plotting ---
     evaluate_and_plot(
