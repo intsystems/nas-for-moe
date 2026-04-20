@@ -17,11 +17,14 @@ Surrogate-EM (S-шаг) алгоритм на подмножестве CIFAR-100
 Отличия от MNIST-версии:
     - 3-канальный вход (RGB, 32×32)
     - Нормализация CIFAR-100 (mean/std per channel)
-    - Подмножество классов (--n-classes, --selected-classes)
-    - Подмножество сэмплов на класс (--samples-per-class)
+    - Данные готовятся отдельно: prepare_cifar100.py
 
 Запуск:
-    python cifar100_sgem.py --device cuda:0 --n-classes 20 --samples-per-class 200
+    # 1. Подготовить данные
+    python prepare_cifar100.py --output-dir ./cifar100_data --n-classes 20 --fraction 0.5
+
+    # 2. Запустить SGEM
+    python cifar100_sgem.py --device cuda:0 --data-dir ./cifar100_data
 """
 
 import os
@@ -184,140 +187,43 @@ class CIFAR100DartsSearchSpace:
 
 
 # ==========================================================================
-# 6. CIFAR-100: подготовка данных (подмножество классов + PCA + KMeans)
+# 6. CIFAR-100: загрузка подготовленных данных
 # ==========================================================================
+#
+# Данные готовятся отдельным скриптом prepare_cifar100.py.
+# Здесь только загрузка и чтение meta.json.
 
 # CIFAR-100 per-channel mean/std
 CIFAR100_MEAN = (0.5071, 0.4867, 0.4408)
 CIFAR100_STD = (0.2675, 0.2565, 0.2761)
 
 
-def setup_cifar100_data(
-    data_dir: Path,
-    n_clusters: int = 20,
-    pca_dim: int = 50,
-    seed: int = 322,
-    n_classes: int = 20,
-    selected_classes: Optional[List[int]] = None,
-    samples_per_class: int = 0,
-) -> dict:
-    """Подготовка подмножества CIFAR-100: скачивание, отбор классов/сэмплов,
-    PCA + KMeans кластеризация, train/val split.
-
-    Args:
-        data_dir: директория для сохранения.
-        n_clusters: число кластеров KMeans.
-        pca_dim: размерность PCA.
-        seed: random seed.
-        n_classes: сколько классов взять (первые n_classes, если selected_classes=None).
-        selected_classes: явный список классов (перебивает n_classes).
-        samples_per_class: макс. число сэмплов на класс (0 = все).
-
-    Returns:
-        dict с мета-информацией (num_classes, class_list).
-    """
+def load_cifar100_meta(data_dir: Path) -> dict:
+    """Загрузить meta.json из подготовленной директории."""
+    import json
     data_dir = Path(data_dir)
-    data_dir.mkdir(parents=True, exist_ok=True)
-
-    meta_path = data_dir / "meta.npy"
+    meta_path = data_dir / "meta.json"
     required = [
         "data_X.npy", "data_y.npy",
         "train_indices.npy", "val_indices.npy",
         "train_cluster_ids.npy", "val_cluster_ids.npy",
         "cluster_centers.npy",
     ]
-    if all((data_dir / f).exists() for f in required) and meta_path.exists():
-        meta = np.load(meta_path, allow_pickle=True).item()
-        print(f"[data] already prepared in {data_dir} "
-              f"({meta['num_classes']} classes, {meta['total_samples']} samples)")
-        return meta
-
-    from torchvision import datasets
-    from sklearn.decomposition import PCA
-    from sklearn.cluster import KMeans
-    from sklearn.model_selection import train_test_split
-
-    cifar_root = data_dir / "cifar100_raw"
-    train_ds = datasets.CIFAR100(str(cifar_root), train=True, download=True)
-    test_ds = datasets.CIFAR100(str(cifar_root), train=False, download=True)
-
-    # Объединяем train + test
-    X_full = np.concatenate([train_ds.data, test_ds.data], axis=0)  # [60000, 32, 32, 3]
-    y_full = np.concatenate([train_ds.targets, test_ds.targets], axis=0).astype(np.int64)
-
-    # --- Выбор подмножества классов ---
-    if selected_classes is not None:
-        class_list = sorted(selected_classes)
-    else:
-        all_classes = sorted(np.unique(y_full).tolist())
-        class_list = all_classes[:n_classes]
-
-    mask = np.isin(y_full, class_list)
-    X_sub = X_full[mask]
-    y_sub = y_full[mask]
-
-    # Перенумерация классов: 0, 1, ..., len(class_list)-1
-    class_map = {c: i for i, c in enumerate(class_list)}
-    y_sub = np.array([class_map[c] for c in y_sub], dtype=np.int64)
-    num_classes = len(class_list)
-
-    # --- Ограничение числа сэмплов на класс ---
-    rng = np.random.RandomState(seed)
-    if samples_per_class > 0:
-        keep_idx = []
-        for c in range(num_classes):
-            c_idx = np.where(y_sub == c)[0]
-            if len(c_idx) > samples_per_class:
-                c_idx = rng.choice(c_idx, samples_per_class, replace=False)
-            keep_idx.append(c_idx)
-        keep_idx = np.concatenate(keep_idx)
-        keep_idx.sort()
-        X_sub = X_sub[keep_idx]
-        y_sub = y_sub[keep_idx]
-
-    N = len(X_sub)
-    print(f"[data] CIFAR-100 subset: {num_classes} classes, {N} samples")
-
-    # Формат: [N, 3, 32, 32] uint8
-    X_img = X_sub.transpose(0, 3, 1, 2)  # HWC → CHW
-
-    # PCA на flatten
-    X_flat = X_sub.reshape(N, -1).astype(np.float32) / 255.0
-    print(f"[data] PCA {pca_dim}-d on {N} CIFAR-100 images...")
-    pca = PCA(n_components=pca_dim, random_state=seed).fit(X_flat)
-    X_pca = pca.transform(X_flat)
-
-    # Train/val split
-    indices = np.arange(N)
-    train_idx, val_idx = train_test_split(
-        indices, test_size=0.2, random_state=seed, stratify=y_sub,
-    )
-
-    # KMeans
-    print(f"[data] KMeans {n_clusters} clusters on PCA-train...")
-    km = KMeans(n_clusters=n_clusters, random_state=seed, n_init=10).fit(
-        X_pca[train_idx]
-    )
-    train_cluster_ids = km.labels_.astype(np.int64)
-    val_cluster_ids = km.predict(X_pca[val_idx]).astype(np.int64)
-    cluster_centers = km.cluster_centers_.astype(np.float32)
-
-    np.save(data_dir / "data_X.npy", X_img)
-    np.save(data_dir / "data_y.npy", y_sub)
-    np.save(data_dir / "train_indices.npy", train_idx)
-    np.save(data_dir / "val_indices.npy", val_idx)
-    np.save(data_dir / "train_cluster_ids.npy", train_cluster_ids)
-    np.save(data_dir / "val_cluster_ids.npy", val_cluster_ids)
-    np.save(data_dir / "cluster_centers.npy", cluster_centers)
-
-    meta = {
-        "num_classes": num_classes,
-        "class_list": class_list,
-        "total_samples": N,
-        "samples_per_class": samples_per_class,
-    }
-    np.save(meta_path, meta)
-    print(f"[data] saved to {data_dir}")
+    missing = [f for f in required if not (data_dir / f).exists()]
+    if missing:
+        raise FileNotFoundError(
+            f"Data not prepared in {data_dir}. Missing: {missing}\n"
+            f"Run prepare_cifar100.py first."
+        )
+    if not meta_path.exists():
+        raise FileNotFoundError(
+            f"meta.json not found in {data_dir}. Run prepare_cifar100.py first."
+        )
+    with open(meta_path) as f:
+        meta = json.load(f)
+    print(f"[data] loaded from {data_dir}: "
+          f"{meta['num_classes']} classes, {meta['total_samples']} samples, "
+          f"{meta['n_clusters']} clusters")
     return meta
 
 
@@ -454,20 +360,14 @@ def main():
     parser = argparse.ArgumentParser(
         description="Surrogate-EM (SGEM) on CIFAR-100 subset"
     )
-    # --- Данные ---
-    parser.add_argument("--data-dir", type=str, default="./cifar100_data")
-    parser.add_argument("--n-classes", type=int, default=20,
-                        help="Число классов CIFAR-100 для эксперимента (первые N)")
-    parser.add_argument("--selected-classes", type=int, nargs="+", default=None,
-                        help="Явный список классов (перебивает --n-classes)")
-    parser.add_argument("--samples-per-class", type=int, default=0,
-                        help="Макс. сэмплов на класс (0 = все)")
+    # --- Данные (подготовлены prepare_cifar100.py) ---
+    parser.add_argument("--data-dir", type=str, default="./cifar100_data",
+                        help="Директория с подготовленными данными (prepare_cifar100.py)")
     # --- Результаты ---
     parser.add_argument("--save-dir", type=str, default="./runs/cifar100_sgem_obs")
     parser.add_argument("--save-results", type=str,
                         default="./runs/results_cifar100_sgem.json")
-    # --- MoE ---
-    parser.add_argument("--M", type=int, default=20)
+    # --- MoE (M берётся из meta.json) ---
     parser.add_argument("--K", type=int, default=5)
     # --- Бюджет ---
     parser.add_argument("--n-seed-observations", type=int, default=50)
@@ -505,20 +405,13 @@ def main():
     collect_dataset.set_seed(args.seed)
     _install_patches()
 
-    # --- Подготовка данных ---
+    # --- Загрузка подготовленных данных ---
     data_dir = Path(args.data_dir)
-    meta = setup_cifar100_data(
-        data_dir,
-        n_clusters=args.M,
-        pca_dim=50,
-        seed=args.seed,
-        n_classes=args.n_classes,
-        selected_classes=args.selected_classes,
-        samples_per_class=args.samples_per_class,
-    )
+    meta = load_cifar100_meta(data_dir)
 
     global _NUM_CLASSES
     _NUM_CLASSES = meta["num_classes"]
+    M = meta["n_clusters"]
 
     X = np.load(data_dir / "data_X.npy")   # uint8 [N, 3, 32, 32]
     y = np.load(data_dir / "data_y.npy")   # int64 [N]
@@ -527,14 +420,14 @@ def main():
 
     print(f"[main] device = {args.device}")
     print(f"[main] num_classes={_NUM_CLASSES}, total_samples={len(X)}")
-    print(f"[main] M={args.M}, K={args.K}, seed-obs={args.n_seed_observations}, "
+    print(f"[main] M={M}, K={args.K}, seed-obs={args.n_seed_observations}, "
           f"EM-iters={args.n_em_iterations}, new-obs/iter={args.n_new_observations}, "
           f"retrain-every={args.surrogate_retrain_every}, "
           f"cell-epochs={args.cell_train_epochs}")
 
     result = optimize_surrogate_em(
         X=X, y=y, cluster_dir=str(data_dir),
-        search_space=ss, M=args.M, K=args.K,
+        search_space=ss, M=M, K=args.K,
         # EM
         n_em_iterations=args.n_em_iterations,
         n_arch_candidates=args.n_arch_candidates,
