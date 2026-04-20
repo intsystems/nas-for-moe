@@ -3,7 +3,7 @@ import torch
 from pathlib import Path
 from torch_geometric.data import Dataset, Data
 from torch_geometric.utils import dense_to_sparse
-from toy_graph import Graph
+from toy_experiment.toy_graph import Graph
 
 
 class ArchClusterACCDataset(Dataset):

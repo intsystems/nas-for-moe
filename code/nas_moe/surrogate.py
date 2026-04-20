@@ -209,6 +209,7 @@ class GAT_Datafeature(nn.Module):
         pre_norm: bool = True,
         hidden_dim: int = 64,
         bool_vec_dim: int = 2,
+        cluster_centers: np.ndarray = None,
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -219,7 +220,7 @@ class GAT_Datafeature(nn.Module):
         # Graph processing через существующий GAT
         self.gat_model = GAT(
             input_dim=input_dim,
-            output_dim=self.hidden_dim,  # GAT выдает hidden_dim вместо output_dim
+            output_dim=self.hidden_dim,
             dropout=dropout,
             heads=heads,
             edge_dropout=edge_dropout,
@@ -227,8 +228,23 @@ class GAT_Datafeature(nn.Module):
             hidden_dim=hidden_dim,
         )
 
+        # Cluster centers for computing data-aware features from b-vector
+        if cluster_centers is not None:
+            self.register_buffer(
+                'cluster_centers',
+                torch.tensor(cluster_centers, dtype=torch.float32),
+            )
+            center_dim = cluster_centers.shape[1]
+            # data features: mean(2) + std(2) + n_selected(1) = 5 for 2D data
+            data_feat_dim = center_dim * 2 + 1
+        else:
+            self.register_buffer('cluster_centers', None)
+            data_feat_dim = 0
+
+        bool_input_dim = bool_vec_dim + data_feat_dim
+
         self.bool_encoder = nn.Sequential(
-            nn.Linear(bool_vec_dim, hidden_dim * 2),
+            nn.Linear(bool_input_dim, hidden_dim * 2),
             nn.ELU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim * 2, hidden_dim),
@@ -241,17 +257,46 @@ class GAT_Datafeature(nn.Module):
             nn.ELU(),
             nn.Dropout(dropout),
         )
-        
+
         # Final output layer
         self.output_layer = nn.Linear(self.hidden_dim, output_dim)
+
+    def _compute_data_features(self, bool_vec):
+        """Compute data-aware features from b-vector and cluster centers.
+
+        Returns [B, center_dim*2 + 1]: weighted mean, weighted std, n_selected/M.
+        Similar b-vectors produce similar features → surrogate generalizes.
+        """
+        b = bool_vec.float()
+        n_sel = b.sum(-1, keepdim=True).clamp(min=1)  # [B, 1]
+        M = float(b.shape[-1])
+
+        # Weighted mean of selected cluster centers: [B, center_dim]
+        data_mean = (b @ self.cluster_centers) / n_sel
+
+        # Weighted std: [B, center_dim]
+        # centers: [M, D], data_mean: [B, D]
+        diff = self.cluster_centers.unsqueeze(0) - data_mean.unsqueeze(1)  # [B, M, D]
+        diff_sq = diff ** 2
+        b_exp = b.unsqueeze(-1)  # [B, M, 1]
+        data_var = (b_exp * diff_sq).sum(1) / n_sel  # [B, D]
+        data_std = torch.sqrt(data_var + 1e-8)
+
+        return torch.cat([data_mean, data_std, n_sel / M], dim=-1)
 
     def forward(self, x, edge_index, batch, bool_vec):
         # Graph processing через GAT
         hg = self.gat_model(x, edge_index, batch)  # [batch_size, hidden_dim]
 
-        # bool_vec: [batch_size, bool_vec_dim], dtype=torch.long
-        bool_features = self.bool_encoder(bool_vec)
-        
+        # Data-aware features from b-vector
+        if self.cluster_centers is not None:
+            data_feat = self._compute_data_features(bool_vec)
+            bool_input = torch.cat([bool_vec, data_feat], dim=-1)
+        else:
+            bool_input = bool_vec
+
+        bool_features = self.bool_encoder(bool_input)
+
         # Fusion
         combined = torch.cat([hg, bool_features], dim=-1)
         out = self.fusion(combined)
@@ -261,6 +306,126 @@ class GAT_Datafeature(nn.Module):
 
         return out
 
+
+class HybridSurrogate(nn.Module):
+    """
+    Hybrid surrogate: GAT graph encoding + flat node features + FiLM conditioning.
+
+    Key improvements over GAT_Datafeature:
+    1. Flat features: direct access to operation identities (bypass lossy graph pooling)
+    2. FiLM conditioning: bool_vec modulates arch features (models arch-data interaction)
+    3. Bilinear interaction: captures multiplicative arch-data dependencies
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int = 1,
+        dropout: float = 0.3,
+        heads: int = 4,
+        edge_dropout: float = 0.1,
+        pre_norm: bool = True,
+        hidden_dim: int = 64,
+        bool_vec_dim: int = 20,
+        nodes_per_graph: int = 4,
+    ):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+        self.nodes_per_graph = nodes_per_graph
+        self.input_dim = input_dim
+
+        # --- Branch 1: GAT graph encoder (captures structure) ---
+        self.gat_model = GAT(
+            input_dim=input_dim,
+            output_dim=hidden_dim,
+            dropout=dropout,
+            heads=heads,
+            edge_dropout=edge_dropout,
+            pre_norm=pre_norm,
+            hidden_dim=hidden_dim,
+        )
+
+        # --- Branch 2: Flat architecture encoder (captures operation identity) ---
+        flat_dim = nodes_per_graph * input_dim
+        self.flat_encoder = nn.Sequential(
+            nn.Linear(flat_dim, hidden_dim * 2),
+            nn.ELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ELU(),
+        )
+
+        # Combine GAT + flat into single arch embedding
+        self.arch_combine = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ELU(),
+            nn.Dropout(dropout),
+        )
+
+        # --- Bool vector encoder ---
+        self.bool_encoder = nn.Sequential(
+            nn.Linear(bool_vec_dim, hidden_dim * 2),
+            nn.ELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ELU(),
+        )
+
+        # --- FiLM conditioning: bool_vec modulates arch features ---
+        self.film_gamma = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Sigmoid(),  # scale in (0, 1) range, centered around 0.5
+        )
+        self.film_beta = nn.Linear(hidden_dim, hidden_dim)
+
+        # --- Bilinear interaction ---
+        self.bilinear = nn.Bilinear(hidden_dim, hidden_dim, hidden_dim)
+
+        # --- Output head ---
+        self.output_head = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim // 2, output_dim),
+        )
+
+    def forward(self, x, edge_index, batch, bool_vec):
+        batch_size = bool_vec.size(0)
+
+        # 1. GAT graph embedding
+        gat_emb = self.gat_model(x, edge_index, batch)  # [B, hidden_dim]
+
+        # 2. Flat node features (all graphs have same number of nodes)
+        flat_feat = x.view(batch_size, self.nodes_per_graph * self.input_dim)
+        flat_emb = self.flat_encoder(flat_feat)  # [B, hidden_dim]
+
+        # 3. Combined architecture embedding
+        arch_emb = self.arch_combine(
+            torch.cat([gat_emb, flat_emb], dim=-1)
+        )  # [B, hidden_dim]
+
+        # 4. Bool vector encoding
+        bool_emb = self.bool_encoder(bool_vec)  # [B, hidden_dim]
+
+        # 5. FiLM conditioning: bool_vec modulates architecture features
+        gamma = self.film_gamma(bool_emb) * 2  # scale ~(0, 2)
+        beta = self.film_beta(bool_emb)
+        modulated = gamma * arch_emb + beta  # [B, hidden_dim]
+
+        # 6. Bilinear interaction
+        bilinear_out = self.bilinear(arch_emb, bool_emb)  # [B, hidden_dim]
+
+        # 7. Output
+        combined = torch.cat([modulated, bilinear_out], dim=-1)  # [B, hidden_dim*2]
+        return self.output_head(combined)
 
 
 # ВАЖНО: функция должна быть в глобальной области, чтобы multiprocessing мог её сериализовать

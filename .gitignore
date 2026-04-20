@@ -190,3 +190,13 @@ poetry.toml
 pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/jupyternotebooks,python
+
+slides/examples.tex
+slides/slides.aux
+slides/slides.nav
+slides/slides.out
+slides/slides.snm
+slides/slides.toc
+prompts/
+model_dataset/
+.claude/

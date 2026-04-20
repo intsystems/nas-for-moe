@@ -41,7 +41,6 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch_geometric.data import Batch, Data
 from torch_geometric.utils import dense_to_sparse
-from sklearn.cluster import KMeans
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
@@ -56,8 +55,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 import toy_searchspace
-from toy_graph import Graph, OPS
+from toy_experiment.toy_graph import Graph, OPS
 from toy_dataset import ArchSubsetACCDataset
+from toy_clustering import assign_to_nearest_cluster
 import nas_moe.surrogate
 
 # ---------------------------------------------------------------------------
@@ -84,32 +84,39 @@ def set_seed(seed: int = SEED):
 def prepare_data(
     X: np.ndarray,
     y: np.ndarray,
-    n_clusters: int,
-    test_size: float = 0.2,
+    cluster_dir: str | Path,
     seed: int = SEED,
 ) -> dict:
     """
-    Глобальный train/val split → KMeans на train → присвоение val-точек кластерам.
+    Загружает предвычисленные кластеры из cluster_dir (результат toy_clustering.py).
+    Число кластеров определяется автоматически из cluster_centers.npy.
+
+    Ожидаемые файлы в cluster_dir:
+        train_indices.npy, val_indices.npy,
+        train_cluster_ids.npy, val_cluster_ids.npy, cluster_centers.npy
 
     Возвращает словарь:
+        n_clusters: int                        — число кластеров
         X_train_by_cluster: list[np.ndarray]  — train-данные по кластерам
         y_train_by_cluster: list[np.ndarray]
         X_val: np.ndarray                      — все валидационные точки
         y_val: np.ndarray
-        val_cluster_ids: np.ndarray            — кластер каждой val-точки (по ближайшему центру)
+        val_cluster_ids: np.ndarray            — кластер каждой val-точки
         cluster_centers: np.ndarray            — центроиды KMeans
     """
-    # 1. Глобальный train/val split
-    X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=test_size, random_state=seed
-    )
+    cluster_dir = Path(cluster_dir)
 
-    # 2. KMeans на train
-    kmeans = KMeans(n_clusters=n_clusters, random_state=seed, n_init=10)
-    train_cluster_ids = kmeans.fit_predict(X_train)
-    cluster_centers = kmeans.cluster_centers_
+    train_idx = np.load(cluster_dir / "train_indices.npy")
+    val_idx = np.load(cluster_dir / "val_indices.npy")
+    train_cluster_ids = np.load(cluster_dir / "train_cluster_ids.npy")
+    val_cluster_ids = np.load(cluster_dir / "val_cluster_ids.npy")
+    cluster_centers = np.load(cluster_dir / "cluster_centers.npy")
 
-    # 3. Разбить train по кластерам
+    n_clusters = len(cluster_centers)
+
+    X_train, y_train = X[train_idx], y[train_idx]
+    X_val, y_val = X[val_idx], y[val_idx]
+
     X_train_by_cluster = []
     y_train_by_cluster = []
     for cid in range(n_clusters):
@@ -117,10 +124,8 @@ def prepare_data(
         X_train_by_cluster.append(X_train[mask])
         y_train_by_cluster.append(y_train[mask])
 
-    # 4. Присвоить val-точки кластерам по ближайшему центроиду
-    val_cluster_ids = assign_to_nearest_cluster(X_val, cluster_centers)
-
     return {
+        "n_clusters": n_clusters,
         "X_train_by_cluster": X_train_by_cluster,
         "y_train_by_cluster": y_train_by_cluster,
         "X_val": X_val,
@@ -128,13 +133,6 @@ def prepare_data(
         "val_cluster_ids": val_cluster_ids,
         "cluster_centers": cluster_centers,
     }
-
-
-def assign_to_nearest_cluster(X: np.ndarray, centers: np.ndarray) -> np.ndarray:
-    """Присвоить каждую точку ближайшему центроиду. Возвращает массив cluster_id."""
-    # distances: (N, K)
-    dists = np.linalg.norm(X[:, None, :] - centers[None, :, :], axis=2)
-    return np.argmin(dists, axis=1)
 
 
 # =========================================================================
@@ -177,12 +175,23 @@ def train_cell(
     batch_size: int = 32,
 ) -> float:
     """Обучить ячейку на (X_train, y_train), вернуть accuracy на (X_val, y_val)."""
-    X_train_t = torch.FloatTensor(X_train)
+    # Нормализация: вычитаем среднее тренировочных данных
+    train_mean = X_train.mean(axis=0)
+    X_train_t = torch.FloatTensor(X_train - train_mean)
     y_train_t = torch.LongTensor(y_train)
-    X_val_t = torch.FloatTensor(X_val)
+    X_val_t = torch.FloatTensor(X_val - train_mean)
     y_val_t = torch.LongTensor(y_val)
 
-    optimizer = torch.optim.SGD(cell.parameters(), lr=lr, momentum=0.9, nesterov=True)
+    # Classification head: cell outputs input_dim features, need num_classes logits
+    num_classes = int(y_train.max()) + 1
+    input_dim = X_train.shape[1]
+    if num_classes > input_dim:
+        head = nn.Linear(input_dim, num_classes)
+        model = nn.Sequential(cell, head)
+    else:
+        model = cell
+
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9, nesterov=True)
     criterion = nn.CrossEntropyLoss()
 
     n_batches = max(1, len(X_train_t) // batch_size)
@@ -199,14 +208,14 @@ def train_cell(
             batch_y = y_shuffled[start:end]
 
             optimizer.zero_grad()
-            outputs = cell(batch_X)
+            outputs = model(batch_X)
             loss = criterion(outputs, batch_y)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(cell.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
     with torch.no_grad():
-        val_outputs = cell(X_val_t)
+        val_outputs = model(X_val_t)
         val_preds = torch.argmax(val_outputs, dim=1)
         val_acc = (val_preds == y_val_t).float().mean().item()
 
@@ -222,15 +231,32 @@ def evaluate_architecture_on_subset(
     X_val: np.ndarray,
     y_val: np.ndarray,
     epochs: int = 100,
+    val_cluster_ids: Optional[np.ndarray] = None,
 ) -> float:
     """
     Обучить архитектуру на train-данных из кластеров, выбранных в b.
-    Оценить на ВСЕХ валидационных данных.
+
+    Если val_cluster_ids задан — оценить только на val-точках из выбранных
+    кластеров (per-cluster accuracy). Иначе — на ВСЕХ валидационных данных.
+
     Вернуть val accuracy (скаляр).
     """
     X_sub, y_sub = get_train_data_for_subset(b, X_train_by_cluster, y_train_by_cluster)
+
+    if val_cluster_ids is not None:
+        # Per-cluster evaluation: only val points from selected clusters
+        selected_clusters = [m for m, flag in enumerate(b) if flag == 1]
+        val_mask = np.isin(val_cluster_ids, selected_clusters)
+        if val_mask.sum() == 0:
+            return 0.0
+        X_val_sub = X_val[val_mask]
+        y_val_sub = y_val[val_mask]
+    else:
+        X_val_sub = X_val
+        y_val_sub = y_val
+
     cell = search_space.create_cell_from_config(config)
-    val_acc = train_cell(cell, X_sub, y_sub, X_val, y_val, epochs=epochs)
+    val_acc = train_cell(cell, X_sub, y_sub, X_val_sub, y_val_sub, epochs=epochs)
     return val_acc
 
 
@@ -408,7 +434,7 @@ def collate_graphs(batch):
 def make_surrogate_loaders(
     observation_paths: List[Path],
     val_fraction: float = 0.2,
-    batch_size: int = 32,
+    batch_size: int = 128,
     seed: int = SEED,
 ) -> Tuple[DataLoader, DataLoader]:
     """Split observation paths into train/val and return DataLoaders."""
@@ -433,6 +459,46 @@ def make_surrogate_loaders(
     return train_loader, val_loader
 
 
+def _pairwise_ranking_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    bool_vec: torch.Tensor = None,
+) -> torch.Tensor:
+    """
+    Pairwise margin ranking loss within a batch.
+
+    Only compares pairs with the same bool_vector (same data subset).
+    For each pair (i, j) where target_i > target_j, encourage pred_i > pred_j.
+    """
+    pred = pred.squeeze()
+    target = target.squeeze()
+    n = pred.size(0)
+    if n < 2:
+        return torch.tensor(0.0, device=pred.device)
+
+    # Compute pairwise differences
+    pred_diff = pred.unsqueeze(0) - pred.unsqueeze(1)    # [n, n]
+    target_diff = target.unsqueeze(0) - target.unsqueeze(1)  # [n, n]
+
+    # Only consider pairs where there's a meaningful accuracy difference
+    mask = (target_diff > 0.02).float()  # i is better than j
+
+    # Only compare pairs with same b-vector (architecture ranking is
+    # only meaningful within the same data subset)
+    if bool_vec is not None:
+        bv = bool_vec.squeeze()  # [n, M]
+        if bv.dim() == 2:
+            same_b = (bv.unsqueeze(0) == bv.unsqueeze(1)).all(dim=-1).float()
+            mask = mask * same_b
+
+    if mask.sum() == 0:
+        return torch.tensor(0.0, device=pred.device)
+
+    # Soft margin loss: want pred_diff > 0 where target_diff > 0
+    losses = torch.log1p(torch.exp(-pred_diff)) * mask
+    return losses.sum() / mask.sum()
+
+
 def train_surrogate(
     surrogate: nn.Module,
     train_loader: DataLoader,
@@ -443,6 +509,7 @@ def train_surrogate(
     weight_decay: float = 1e-4,
     patience: int = 30,
     verbose: bool = False,
+    ranking_loss_weight: float = 0.5,
 ) -> dict:
     """Обучить суррогатную модель с optional early stopping. Вернуть историю loss."""
     optimizer = torch.optim.Adam(
@@ -474,7 +541,9 @@ def train_surrogate(
             batch = batch.to(device)
             optimizer.zero_grad()
             out = surrogate(batch.x, batch.edge_index, batch.batch, batch.bool_vector)
-            loss = criterion(out, batch.y)
+            mse_loss = criterion(out, batch.y)
+            rank_loss = _pairwise_ranking_loss(out, batch.y, batch.bool_vector)
+            loss = mse_loss + ranking_loss_weight * rank_loss
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
@@ -535,11 +604,26 @@ def create_surrogate(
     dropout: float = 0.3,
     hidden_dim: int = 16,
     heads: int = 2,
+    model_type: str = "gat",
+    nodes_per_graph: int = 4,
+    cluster_centers: np.ndarray = None,
 ) -> nn.Module:
-    """Create a GAT_Datafeature surrogate model."""
+    """Create a surrogate model.
+
+    Args:
+        model_type: "gat" for GAT_Datafeature, "hybrid" for HybridSurrogate.
+        cluster_centers: [M, D] array of cluster centers for data-aware features.
+    """
+    if model_type == "hybrid":
+        return nas_moe.surrogate.HybridSurrogate(
+            n_features, 1, dropout,
+            hidden_dim=hidden_dim, heads=heads, bool_vec_dim=n_clusters,
+            nodes_per_graph=nodes_per_graph,
+        )
     return nas_moe.surrogate.GAT_Datafeature(
         n_features, 1, dropout,
         hidden_dim=hidden_dim, heads=heads, bool_vec_dim=n_clusters,
+        cluster_centers=cluster_centers,
     )
 
 
@@ -551,7 +635,7 @@ def active_learning_loop(
     # Данные
     X: np.ndarray,
     y: np.ndarray,
-    n_clusters: int = 2,
+    cluster_dir: str | Path = "./data",
     # Пространство поиска
     input_dim: int = 2,
     num_nodes_per_cell: int = 4,
@@ -572,6 +656,8 @@ def active_learning_loop(
     surrogate_patience: int = 30,
     # Обучение ячеек
     cell_train_epochs: int = 100,
+    # Evaluation mode
+    per_cluster_eval: bool = False,
     # IO
     save_dir: str = "./active_dataset",
     device: str = "cpu",
@@ -596,13 +682,18 @@ def active_learning_loop(
     os.makedirs(save_dir, exist_ok=True)
 
     # --- Подготовка данных ---
-    data = prepare_data(X, y, n_clusters)
+    data = prepare_data(X, y, cluster_dir=cluster_dir)
+    n_clusters = data["n_clusters"]
     X_train_by_cluster = data["X_train_by_cluster"]
     y_train_by_cluster = data["y_train_by_cluster"]
     X_val = data["X_val"]
     y_val = data["y_val"]
+    val_cluster_ids = data["val_cluster_ids"] if per_cluster_eval else None
 
     if verbose:
+        eval_mode = "per-cluster" if per_cluster_eval else "global"
+        print(f"  Evaluation mode: {eval_mode}")
+        print(f"  n_clusters (auto-detected): {n_clusters}")
         for k in range(n_clusters):
             print(f"  Cluster {k}: {len(X_train_by_cluster[k])} train, "
                   f"{(data['val_cluster_ids'] == k).sum()} val points")
@@ -644,6 +735,7 @@ def active_learning_loop(
                 X_train_by_cluster, y_train_by_cluster,
                 X_val, y_val,
                 epochs=cell_train_epochs,
+                val_cluster_ids=val_cluster_ids,
             )
             path = save_observation(config, b, val_acc, save_dir, obs_index)
             observation_paths.append(path)
@@ -737,6 +829,7 @@ def active_learning_loop(
                 X_train_by_cluster, y_train_by_cluster,
                 X_val, y_val,
                 epochs=cell_train_epochs,
+                val_cluster_ids=val_cluster_ids,
             )
 
             path = save_observation(best_config, b, val_acc, save_dir, obs_index)
@@ -782,7 +875,7 @@ def active_learning_loop(
         verbose=verbose,
     )
 
-    return observation_paths, surr, final_history
+    return observation_paths, surr, n_clusters, final_history
 
 
 # =========================================================================
@@ -935,9 +1028,10 @@ def main():
     )
     parser.add_argument("--data-dir", type=str, default="./data",
                         help="Директория с data_X.npy и data_y.npy")
+    parser.add_argument("--cluster-dir", type=str, default=None,
+                        help="Директория с предвычисленными кластерами (default: same as data-dir)")
     parser.add_argument("--save-dir", type=str, default="./active_dataset",
                         help="Директория для сохранения JSON-наблюдений")
-    parser.add_argument("--n-clusters", type=int, default=2)
     parser.add_argument("--input-dim", type=int, default=2,
                         help="Размерность входа ячейки")
     parser.add_argument("--n-initial", type=int, default=100,
@@ -962,9 +1056,14 @@ def main():
     parser.add_argument("--surrogate-val-fraction", type=float, default=0.2)
     parser.add_argument("--surrogate-patience", type=int, default=30)
     parser.add_argument("--checkpoint-path", type=str,
-                        default="./surr.pth")
+                        default="./runs/surr.pth")
 
+    parser.add_argument("--num-nodes-per-cell", type=int, default=4,
+                        help="Число узлов (операций) в ячейке архитектуры")
     parser.add_argument("--cell-train-epochs", type=int, default=100)
+    parser.add_argument("--per-cluster-eval", action="store_true",
+                        help="Оценивать accuracy только на val-точках из выбранных "
+                             "кластеров (per-cluster eval) вместо всего val набора")
 
     parser.add_argument("--device", type=str,
                         default="cuda" if torch.cuda.is_available() else "cpu")
@@ -972,14 +1071,16 @@ def main():
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
+    cluster_dir = Path(args.cluster_dir) if args.cluster_dir else data_dir
     X = np.load(data_dir / "data_X.npy")
     y = np.load(data_dir / "data_y.npy")
 
-    observation_paths, final_surrogate, final_history = active_learning_loop(
+    observation_paths, final_surrogate, n_clusters, final_history = active_learning_loop(
         X=X,
         y=y,
-        n_clusters=args.n_clusters,
+        cluster_dir=cluster_dir,
         input_dim=args.input_dim,
+        num_nodes_per_cell=args.num_nodes_per_cell,
         n_initial=args.n_initial,
         n_total=args.n_total,
         n_candidates=args.n_candidates,
@@ -994,6 +1095,7 @@ def main():
         surrogate_val_fraction=args.surrogate_val_fraction,
         surrogate_patience=args.surrogate_patience,
         cell_train_epochs=args.cell_train_epochs,
+        per_cluster_eval=args.per_cluster_eval,
         save_dir=args.save_dir,
         device=args.device,
         verbose=True,
@@ -1005,7 +1107,7 @@ def main():
 
     # --- Evaluation & Plotting ---
     evaluate_and_plot(
-        final_surrogate, observation_paths, args.n_clusters,
+        final_surrogate, observation_paths, n_clusters,
         device=args.device, history=final_history,
         save_dir=args.save_dir,
     )

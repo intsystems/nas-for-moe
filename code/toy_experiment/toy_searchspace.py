@@ -181,21 +181,7 @@ class ToySearchSpace:
                 op_name = value
                 op_class = self.OPS[op_name]
                 
-                if op_name == 'skip_connect':
-                    node = op_class(self.input_dim)
-                elif op_name == 'linear':
-                    node = op_class(self.input_dim)
-                elif op_name == 'square':
-                    node = op_class(self.input_dim)
-                elif op_name == 'shift':
-                    node = op_class(self.input_dim)
-                elif op_name == 'rbf':
-                    node = op_class(self.input_dim)
-                elif op_name == 'relu':
-                    node = op_class(self.input_dim)
-                elif op_name == 'dropout':
-                    node = op_class(self.input_dim)
-                
+                node = op_class(self.input_dim)
                 nodes[node_idx] = node
 
         for key, value in config.items():
@@ -232,22 +218,7 @@ class ToySearchSpace:
             config[f'input_{node_idx}'] = input_idx
             
             op_class = self.OPS[op_name]
-            
-            if op_name == 'skip_connect':
-                node = op_class(self.input_dim)
-            elif op_name == 'linear':
-                node = op_class(self.input_dim)
-            elif op_name == 'square':
-                node = op_class(self.input_dim)
-            elif op_name == 'shift':
-                node = op_class(self.input_dim)
-            elif op_name == 'rbf':
-                node = op_class(self.input_dim)
-            elif op_name == 'relu':
-                node = op_class(self.input_dim)
-            elif op_name == 'dropout':
-                node = op_class(self.input_dim)
-            
+            node = op_class(self.input_dim)
             nodes[node_idx] = node
         
         return config
