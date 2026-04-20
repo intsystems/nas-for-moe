@@ -21,7 +21,6 @@ xhost +local:docker
 
 docker run \
     -it \
-    --rm \
     --name nas-moe-container \
     --gpus all \
     --ipc host \
@@ -29,7 +28,7 @@ docker run \
     -p 8887:8887 \
     -e DISPLAY=$DISPLAY \
     --shm-size=64g \
-    -v /home/petr:/pbabkin \
+    -v /home/pbabkin:/pbabkin \
     -v /tmp/.X11-unix:/tmp/.X11-unix \
     --env LIBGL_ALWAYS_SOFTWARE=1 \
     --volume="$XAUTH:$XAUTH" \
