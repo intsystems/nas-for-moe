@@ -9,7 +9,11 @@
   5. Сохранение весов в surr_cifar100_pretrained.pth.
 
 Запуск:
-    python cifar100_random_pretrain.py --device cuda:0 --n-classes 20 --samples-per-class 200
+    # 1. Подготовить данные
+    python prepare_cifar100.py --output-dir ./cifar100_data --n-classes 20 --fraction 0.5
+
+    # 2. Pretrain суррогата
+    python cifar100_random_pretrain.py --device cuda:0 --data-dir ./cifar100_data
 """
 
 import argparse
@@ -36,14 +40,9 @@ def main():
     parser = argparse.ArgumentParser(
         description="Random dataset collection + surrogate pretraining on CIFAR-100 subset"
     )
-    # --- Данные ---
-    parser.add_argument("--data-dir", type=str, default="./cifar100_data")
-    parser.add_argument("--n-classes", type=int, default=20,
-                        help="Число классов CIFAR-100 (первые N)")
-    parser.add_argument("--selected-classes", type=int, nargs="+", default=None,
-                        help="Явный список классов (перебивает --n-classes)")
-    parser.add_argument("--samples-per-class", type=int, default=0,
-                        help="Макс. сэмплов на класс (0 = все)")
+    # --- Данные (подготовлены prepare_cifar100.py) ---
+    parser.add_argument("--data-dir", type=str, default="./cifar100_data",
+                        help="Директория с подготовленными данными (prepare_cifar100.py)")
     # --- Результаты ---
     parser.add_argument("--save-dir", type=str,
                         default="./runs/cifar100_random_dataset")
@@ -64,24 +63,15 @@ def main():
     parser.add_argument("--seed", type=int, default=322)
     parser.add_argument("--device", type=str, default="cuda:0",
                         help="Устройство: cuda:0, cuda:1, cpu и т.д.")
-    parser.add_argument("--M", type=int, default=20, help="Число кластеров")
     args = parser.parse_args()
 
     # Воспроизводимость + CIFAR-100 evaluator patch
     collect_dataset.set_seed(args.seed)
     cifar100_sgem._install_patches()
 
-    # Данные
+    # Данные (подготовлены prepare_cifar100.py)
     data_dir = Path(args.data_dir)
-    meta = cifar100_sgem.setup_cifar100_data(
-        data_dir,
-        n_clusters=args.M,
-        pca_dim=50,
-        seed=args.seed,
-        n_classes=args.n_classes,
-        selected_classes=args.selected_classes,
-        samples_per_class=args.samples_per_class,
-    )
+    meta = cifar100_sgem.load_cifar100_meta(data_dir)
 
     cifar100_sgem._NUM_CLASSES = meta["num_classes"]
 
