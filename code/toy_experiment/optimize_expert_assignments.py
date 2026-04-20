@@ -63,6 +63,10 @@ class OptimizationResult:
     history: List[float] = field(default_factory=list)  # История оптимизации
     method: str = ""
     real_accuracies: Optional[List[float]] = None  # Реальные accuracy экспертов после переобучения
+    # История S-step фазы A: для каждого S-шага список из K реальных val-accuracy
+    # текущих лучших архитектур экспертов на их кластерах (None, если эксперт не
+    # получил ни одного кластера).
+    phase_a_history: List[List[Optional[float]]] = field(default_factory=list)
 
 
 # =========================================================================
@@ -521,6 +525,8 @@ def save_results(results: Dict[str, OptimizationResult], path: str):
         }
         if res.real_accuracies is not None:
             entry["real_accuracies"] = res.real_accuracies
+        if res.phase_a_history:
+            entry["phase_a_history"] = res.phase_a_history
         save_data[method_name] = entry
     with open(path, "w") as f:
         json.dump(save_data, f, indent=2)

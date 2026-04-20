@@ -341,7 +341,7 @@ def collect_s_step_observations(
     val_cluster_ids: Optional[np.ndarray] = None,
     focused_ratio: float = 0.5,
     explore_flip_prob: float = 0.1,
-) -> Tuple[List[Path], int]:
+) -> Tuple[List[Path], int, List[Optional[float]]]:
     """
     S-шаг: собрать новые наблюдения (реальное обучение архитектур).
 
@@ -357,9 +357,13 @@ def collect_s_step_observations(
     explore_flip_prob: вероятность инверсии каждого бита b в фазе C.
 
     Returns:
-        (updated observation_paths, updated obs_index)
+        (updated observation_paths, updated obs_index, phase_a_accs)
+        phase_a_accs — список длины K с реальными val-acc каждого эксперта
+        (None, если эксперт не получил ни одного кластера или бюджет new_count
+        был исчерпан до его оценки).
     """
     new_count = 0
+    phase_a_accs: List[Optional[float]] = [None] * K
 
     # --- Фаза A: оценить текущих экспертов ---
     for k in range(K):
@@ -381,6 +385,7 @@ def collect_s_step_observations(
         observation_paths.append(path)
         obs_index += 1
         new_count += 1
+        phase_a_accs[k] = float(val_acc)
 
         if verbose:
             clusters = [m for m in range(n_clusters) if b_k[m] == 1]
@@ -482,7 +487,7 @@ def collect_s_step_observations(
         if verbose:
             print(f"    S-step [C] explore: b={b}, acc={val_acc:.4f}")
 
-    return observation_paths, obs_index
+    return observation_paths, obs_index, phase_a_accs
 
 
 # =========================================================================
@@ -782,6 +787,7 @@ def optimize_surrogate_em(
     configs = [sample_valid_config(search_space) for _ in range(K)]
 
     history: List[float] = []
+    phase_a_history: List[List[Optional[float]]] = []
     best_log_lik = -float("inf")
     best_logits = logits.clone()
     best_configs = copy.deepcopy(configs)
@@ -920,7 +926,7 @@ def optimize_surrogate_em(
                 r_best = F.softmax(best_logits, dim=-1).cpu().numpy()
             hard_current = discretize_assignments(r_best)
 
-            observation_paths, obs_index = collect_s_step_observations(
+            observation_paths, obs_index, phase_a_accs = collect_s_step_observations(
                 configs=best_configs,
                 hard_assignments=hard_current,
                 M=M, K=K,
@@ -943,6 +949,7 @@ def optimize_surrogate_em(
                 focused_ratio=focused_ratio,
                 explore_flip_prob=explore_flip_prob,
             )
+            phase_a_history.append(phase_a_accs)
 
             retrain_count += 1
             surrogate = retrain_surrogate_from_observations(
@@ -1016,6 +1023,7 @@ def optimize_surrogate_em(
         objective_value=best_log_lik,
         history=history,
         method="surrogate_em",
+        phase_a_history=phase_a_history,
     )
 
 
