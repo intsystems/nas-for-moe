@@ -585,6 +585,7 @@ def optimize_surrogate_em(
     tau: float = 0.5,
     entropy_weight: float = 0.0,
     entropy_weight_end: Optional[float] = None,
+    entropy_cutoff_frac: Optional[float] = None,
     max_logit_spread: float = 0.0,
     # S-шаг параметры
     surrogate_retrain_every: int = 5,
@@ -799,12 +800,28 @@ def optimize_surrogate_em(
     # Entropy annealing setup
     ew_start = entropy_weight
     ew_end = entropy_weight_end if entropy_weight_end is not None else entropy_weight
-    if verbose and ew_start != ew_end:
-        print(f"Entropy annealing: {ew_start} -> {ew_end}")
+    if entropy_cutoff_frac is not None:
+        # После cutoff вес = 0. До cutoff — линейный отжиг ew_start -> ew_end.
+        cutoff_iter = max(1, int(round(entropy_cutoff_frac * n_em_iterations)))
+        if verbose:
+            print(f"Entropy schedule: {ew_start} -> {ew_end} over first "
+                  f"{cutoff_iter}/{n_em_iterations} iters, then 0")
+    else:
+        cutoff_iter = None
+        if verbose and ew_start != ew_end:
+            print(f"Entropy annealing: {ew_start} -> {ew_end}")
 
     for em_iter in iterator:
         # Linearly anneal entropy weight
-        if n_em_iterations > 1:
+        if cutoff_iter is not None:
+            if em_iter >= cutoff_iter:
+                current_entropy_weight = 0.0
+            elif cutoff_iter > 1:
+                t = (em_iter - 1) / (cutoff_iter - 1)
+                current_entropy_weight = ew_start + (ew_end - ew_start) * t
+            else:
+                current_entropy_weight = ew_end
+        elif n_em_iterations > 1:
             t = (em_iter - 1) / (n_em_iterations - 1)
             current_entropy_weight = ew_start + (ew_end - ew_start) * t
         else:
@@ -1047,6 +1064,11 @@ def main():
     parser.add_argument("--entropy-weight-end", type=float, default=None,
                         help="Конечный вес entropy (для annealing). Если задан, "
                              "entropy-weight линейно уменьшается от start до end")
+    parser.add_argument("--entropy-cutoff-frac", type=float, default=None,
+                        help="Доля итераций (0..1), после которой entropy_weight=0. "
+                             "До cutoff — линейный отжиг от entropy-weight до "
+                             "entropy-weight-end. Пример: 0.5 — балансируем первую "
+                             "половину итераций, затем вес обнуляется")
     parser.add_argument("--max-logit-spread", type=float, default=0.0,
                         help="Макс. разница logit от среднего в строке (0=выкл). "
                              "Пример: 2.0 -> min softmax ~0.12 для K=2")
@@ -1135,6 +1157,7 @@ def main():
         tau=args.tau,
         entropy_weight=args.entropy_weight,
         entropy_weight_end=args.entropy_weight_end,
+        entropy_cutoff_frac=args.entropy_cutoff_frac,
         max_logit_spread=args.max_logit_spread,
         # S-step
         surrogate_retrain_every=args.surrogate_retrain_every,
