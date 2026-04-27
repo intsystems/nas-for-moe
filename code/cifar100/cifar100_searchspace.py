@@ -9,11 +9,18 @@
 Импортируется в cifar100_sgem.py и в бейзлайнах.
 """
 
+import sys
+from pathlib import Path
+
 from sklearn.preprocessing import OneHotEncoder
 import numpy as np
 
-# Импортируем готовые модули операций (SepConv/PoolOp/Identity и пр.)
-from darts_searchspace import make_op as _make_op_full
+# darts_searchspace.py живёт в code/mnist/ — добавим в path до импорта
+_MNIST_DIR = Path(__file__).resolve().parent.parent / "mnist"
+if str(_MNIST_DIR) not in sys.path:
+    sys.path.insert(0, str(_MNIST_DIR))
+
+from darts_searchspace import make_op as _make_op_full  # noqa: E402
 
 # 4 операции — выбраны так, чтобы покрыть conv-small / conv-large / pool / skip.
 DARTS_OPS_SMALL = [
