@@ -587,6 +587,7 @@ def optimize_surrogate_em(
     entropy_weight_end: Optional[float] = None,
     entropy_cutoff_frac: Optional[float] = None,
     max_logit_spread: float = 0.0,
+    load_balance_weight: float = 0.0,
     # S-шаг параметры
     surrogate_retrain_every: int = 5,
     n_new_observations: int = 10,
@@ -894,7 +895,18 @@ def optimize_surrogate_em(
             # H(r) = -Σ_m Σ_k r_mk * log(r_mk) — максимизируем энтропию
             entropy = -(r_soft * log_r).sum()
 
-            loss = -q_function - current_entropy_weight * entropy
+            # Load balancing: штраф за коллапс экспертов.
+            # P_k = (1/M) Σ_m r_mk — средняя нагрузка эксперта.
+            # K · Σ_k P_k^2 = 1 при равномерном использовании, K при коллапсе.
+            P = r_soft.mean(dim=0)  # [K]
+            K_dim = r_soft.shape[-1]
+            load_balance = K_dim * (P * P).sum()
+
+            loss = (
+                -q_function
+                - current_entropy_weight * entropy
+                + load_balance_weight * load_balance
+            )
             loss.backward()
             r_optimizer.step()
 
@@ -1072,6 +1084,10 @@ def main():
     parser.add_argument("--max-logit-spread", type=float, default=0.0,
                         help="Макс. разница logit от среднего в строке (0=выкл). "
                              "Пример: 2.0 -> min softmax ~0.12 для K=2")
+    parser.add_argument("--load-balance-weight", type=float, default=0.0,
+                        help="Штраф за коллапс экспертов: K·Σ_k (mean_m r_mk)^2. "
+                             "Равен 1 при равномерном использовании, K при коллапсе. "
+                             "Рекомендуемые значения 0.01-0.1")
 
     # S-шаг параметры
     parser.add_argument("--surrogate-retrain-every", type=int, default=5,
@@ -1159,6 +1175,7 @@ def main():
         entropy_weight_end=args.entropy_weight_end,
         entropy_cutoff_frac=args.entropy_cutoff_frac,
         max_logit_spread=args.max_logit_spread,
+        load_balance_weight=args.load_balance_weight,
         # S-step
         surrogate_retrain_every=args.surrogate_retrain_every,
         n_new_observations=args.n_new_observations,

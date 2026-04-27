@@ -53,14 +53,14 @@ sys.path.insert(0, str(SCRIPT_DIR))
 # ==========================================================================
 
 import toy_experiment.toy_graph as toy_graph  # noqa: E402
-from sklearn.preprocessing import OneHotEncoder  # noqa: E402
-from darts_searchspace import DARTS_OPS, OPS_NEW, make_op  # noqa: E402
+from cifar100_searchspace import (  # noqa: E402
+    DARTS_OPS_SMALL as DARTS_OPS,
+    OPS_NEW_SMALL as OPS_NEW,
+    make_op,
+    patch_toy_graph_ops,
+)
 
-toy_graph.OPS = OPS_NEW
-_enc = OneHotEncoder(handle_unknown="ignore")
-toy_graph.OPS_ONE_HOT = _enc.fit_transform(
-    np.array(OPS_NEW).reshape(-1, 1)
-).toarray()
+patch_toy_graph_ops()
 
 
 # ==========================================================================
@@ -395,6 +395,9 @@ def main():
                         help="Оценивать только на val-точках выбранных кластеров")
     parser.add_argument("--focused-ratio", type=float, default=0.5)
     parser.add_argument("--explore-flip-prob", type=float, default=0.1)
+    parser.add_argument("--load-balance-weight", type=float, default=0.05,
+                        help="Штраф за коллапс экспертов "
+                             "(K·Σ_k (mean_m r_mk)^2). 0=выкл")
     parser.add_argument("--initial-surrogate-path", type=str, default=None,
                         help="Путь к предобученному суррогату (.pth)")
     parser.add_argument("--initial-obs-dir", type=str, default=None,
@@ -437,6 +440,7 @@ def main():
         entropy_weight=0.0,
         entropy_weight_end=None,
         max_logit_spread=0.0,
+        load_balance_weight=args.load_balance_weight,
         # S-шаг
         surrogate_retrain_every=args.surrogate_retrain_every,
         n_new_observations=args.n_new_observations,
