@@ -1,17 +1,17 @@
-"""DARTS-baseline: одна архитектура → MoE из K её копий.
+"""Random-search-single-arch baseline: одна архитектура → MoE из K её копий.
 
 Этапы:
     1. Random search по архитектурам (без MoE): обучить N кандидатов на полных
-       train-данных, выбрать лучшую по val_accuracy. Это прокси для DARTS-search:
-       находим «единую универсальную» архитектуру, не учитывая разделение по
-       кластерам.
+       train-данных, выбрать лучшую по val_accuracy. Находим «единую
+       универсальную» архитектуру, не учитывая разделение по кластерам.
     2. Построить MoE из K копий найденной архитектуры с learnable softmax-gating
        (cifar100_moe.CIFAR100MoE).
     3. Обучить MoE end-to-end на полных train-данных, оценить val accuracy.
 
 Запуск:
-    python cifar100_darts_baseline.py --device cuda:0 --data-dir ./cifar100_data \\
-        --K 5 --n-arch-candidates 30 --search-epochs 10 --moe-epochs 30
+    python cifar100_random_search_single_arch.py --device cuda:0 \\
+        --data-dir ./cifar100_data --K 5 --n-arch-candidates 30 \\
+        --search-epochs 10 --moe-epochs 30
 """
 
 from __future__ import annotations
@@ -87,7 +87,7 @@ def main():
     )
     parser.add_argument("--data-dir", type=str, default="./cifar100_data")
     parser.add_argument("--save-results", type=str,
-                        default="./runs/results_cifar100_darts_baseline.json")
+                        default="./runs/results_cifar100_random_search_single_arch.json")
     parser.add_argument("--K", type=int, default=5)
     parser.add_argument("--n-arch-candidates", type=int, default=30)
     parser.add_argument("--search-epochs", type=int, default=10)
@@ -169,7 +169,7 @@ def main():
     save_path = Path(args.save_results)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     result = {
-        "cifar100_darts_baseline": {
+        "cifar100_random_search_single_arch": {
             "K": args.K,
             "best_single_arch": best_config,
             "best_single_arch_val_acc": float(best_search_acc),

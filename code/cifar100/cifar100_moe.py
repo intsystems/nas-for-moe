@@ -1,7 +1,7 @@
 """MoE для CIFAR-100 с learnable softmax-gating.
 
 Используется в бейзлайнах:
-    - cifar100_darts_baseline.py — все K экспертов имеют ОДНУ И ТУ ЖЕ архитектуру
+    - cifar100_random_search_single_arch.py — все K экспертов имеют ОДНУ И ТУ ЖЕ архитектуру
     - cifar100_random_moe_baseline.py — каждый эксперт случайный
 
 Структура аналогична mnist/train_random_moe.py, но 3-канальный вход (RGB) и
