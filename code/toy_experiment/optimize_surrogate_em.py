@@ -342,6 +342,7 @@ def collect_s_step_observations(
     val_cluster_ids: Optional[np.ndarray] = None,
     focused_ratio: float = 0.5,
     explore_flip_prob: float = 0.1,
+    phase_c_uniform_mix: float = 0.0,
 ) -> Tuple[List[Path], int, List[Optional[float]]]:
     """
     S-шаг: собрать новые наблюдения (реальное обучение архитектур).
@@ -449,16 +450,26 @@ def collect_s_step_observations(
 
     # --- Фаза C: текущие архитектуры на Categorical(r)-сэмплах ---
     # На каждый раунд сэмплируется свежий R [M, K] (для каждой строки m:
-    # c_m ~ Categorical(r_m), затем one-hot). Из R берутся K непересекающихся
+    # c_m ~ Categorical(r_mix_m), затем one-hot). Из R берутся K непересекающихся
     # столбцов b_k = R[:, k]. Для каждого эксперта k: реально обучаем
     # текущую α_k = configs[k] на b_k, сохраняем наблюдение.
+    #
+    # phase_c_uniform_mix = α ∈ [0,1]:
+    #   r_mix[m] = (1-α)·r[m] + α·(1/K, ..., 1/K)
+    # α=0: чистая Categorical(r) (минимальный exploration)
+    # α=1: равномерное сэмплирование (максимальный exploration, без зависимости от r)
+    if phase_c_uniform_mix > 0:
+        r_mix = (1.0 - phase_c_uniform_mix) * r_soft + \
+                phase_c_uniform_mix * (1.0 / K)
+    else:
+        r_mix = r_soft
+
     n_rounds = n_explore // K  # вариант (a): n_explore — общий бюджет obs
 
     for round_i in range(n_rounds):
-        # Сэмплируем R из Categorical(r_m) для каждой строки независимо
-        # numpy.random.choice по строкам — эквивалент Gumbel-Max
+        # Сэмплируем R из Categorical(r_mix_m) для каждой строки независимо
         c = np.array([
-            np.random.choice(K, p=r_soft[m])
+            np.random.choice(K, p=r_mix[m])
             for m in range(n_clusters)
         ])  # [M] — индекс эксперта для каждого кластера
 
@@ -592,6 +603,7 @@ def optimize_surrogate_em(
     load_balance_weight: float = 0.0,
     e_step_mc_samples: int = 0,
     n_r_mc_samples: int = 1,
+    phase_c_uniform_mix: float = 0.0,
     # S-шаг параметры
     surrogate_retrain_every: int = 5,
     n_new_observations: int = 10,
@@ -1007,6 +1019,7 @@ def optimize_surrogate_em(
                 val_cluster_ids=val_cluster_ids,
                 focused_ratio=focused_ratio,
                 explore_flip_prob=explore_flip_prob,
+                phase_c_uniform_mix=phase_c_uniform_mix,
             )
             phase_a_history.append(phase_a_accs)
 
@@ -1121,6 +1134,11 @@ def main():
                              "(один сэмпл за шаг). Например --n-r-gradient-steps 1 "
                              "--n-r-mc-samples 50 = один шаг с MC-градиентом "
                              "усреднённым по 50 сэмплам")
+    parser.add_argument("--phase-c-uniform-mix", type=float, default=0.0,
+                        help="Смесь Categorical(r) с равномерным в Phase C: "
+                             "r_mix = (1-α)·r + α·(1/K). 0=чистая Categorical(r), "
+                             "1=равномерное. Рекомендуемые значения 0.3-0.7 для "
+                             "большего exploration в новых b-векторах")
 
     # S-шаг параметры
     parser.add_argument("--surrogate-retrain-every", type=int, default=5,
@@ -1211,6 +1229,7 @@ def main():
         load_balance_weight=args.load_balance_weight,
         e_step_mc_samples=args.e_step_mc_samples,
         n_r_mc_samples=args.n_r_mc_samples,
+        phase_c_uniform_mix=args.phase_c_uniform_mix,
         # S-step
         surrogate_retrain_every=args.surrogate_retrain_every,
         n_new_observations=args.n_new_observations,

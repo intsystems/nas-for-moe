@@ -406,6 +406,10 @@ def main():
                              "на M-шаге. 1 = поведение по умолчанию")
     parser.add_argument("--n-r-gradient-steps", type=int, default=50,
                         help="Число градиентных шагов по r на M-шаге")
+    parser.add_argument("--phase-c-uniform-mix", type=float, default=0.0,
+                        help="Смесь Categorical(r) с равномерным в Phase C: "
+                             "r_mix = (1-α)·r + α·(1/K). 0=чистая Categorical(r), "
+                             "1=равномерное")
     parser.add_argument("--initial-surrogate-path", type=str, default=None,
                         help="Путь к предобученному суррогату (.pth)")
     parser.add_argument("--initial-obs-dir", type=str, default=None,
@@ -451,6 +455,7 @@ def main():
         load_balance_weight=args.load_balance_weight,
         e_step_mc_samples=args.e_step_mc_samples,
         n_r_mc_samples=args.n_r_mc_samples,
+        phase_c_uniform_mix=args.phase_c_uniform_mix,
         # S-шаг
         surrogate_retrain_every=args.surrogate_retrain_every,
         n_new_observations=args.n_new_observations,
