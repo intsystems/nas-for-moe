@@ -320,6 +320,7 @@ def sample_b_near_split(
 def collect_s_step_observations(
     configs: List[dict],
     hard_assignments: np.ndarray,
+    r_soft: np.ndarray,
     M: int,
     K: int,
     search_space,
@@ -348,13 +349,16 @@ def collect_s_step_observations(
     Фаза A: оценить текущих K экспертов на их кластерах.
     Фаза B: focused exploration — случайные архитектуры на b-векторах
             текущего split (улучшает ранжирование архитектур суррогатом).
-    Фаза C: UCB-guided exploration по парам (α, b), где b — возмущение
-            b-вектора одного из текущих экспертов (flip каждого бита с
-            вероятностью explore_flip_prob). Если expert_b_vectors пуст —
-            fallback на полностью случайные b.
+    Фаза C: текущие архитектуры α_1..α_K обучаются на b-векторах,
+            сэмплированных из Categorical(r). На каждый раунд сэмплируется
+            один R [M,K] (для каждой строки m: c_m ~ Categorical(r_m),
+            затем one-hot), из него берутся K непересекающихся столбцов
+            b_k = R[:,k]. Раундов: n_explore // K.
 
     focused_ratio: доля бюджета (после фазы A) на фазу B (остальное — фаза C).
-    explore_flip_prob: вероятность инверсии каждого бита b в фазе C.
+    explore_flip_prob: legacy-параметр, в текущей фазе C не используется.
+
+    r_soft: [M, K] soft routing матрица для сэмплирования b в фазе C.
 
     Returns:
         (updated observation_paths, updated obs_index, phase_a_accs)
@@ -443,49 +447,47 @@ def collect_s_step_observations(
             print(f"    S-step [B] UCB-focused: clusters={clusters}, "
                   f"ucb={best_score:.4f}, acc={val_acc:.4f}")
 
-    # --- Фаза C: UCB-guided exploration по (α, b), b ≈ текущий split ---
-    def _sample_b_c() -> List[int]:
-        if expert_b_vectors:
-            return sample_b_near_split(
-                expert_b_vectors, n_clusters, explore_flip_prob,
+    # --- Фаза C: текущие архитектуры на Categorical(r)-сэмплах ---
+    # На каждый раунд сэмплируется свежий R [M, K] (для каждой строки m:
+    # c_m ~ Categorical(r_m), затем one-hot). Из R берутся K непересекающихся
+    # столбцов b_k = R[:, k]. Для каждого эксперта k: реально обучаем
+    # текущую α_k = configs[k] на b_k, сохраняем наблюдение.
+    n_rounds = n_explore // K  # вариант (a): n_explore — общий бюджет obs
+
+    for round_i in range(n_rounds):
+        # Сэмплируем R из Categorical(r_m) для каждой строки независимо
+        # numpy.random.choice по строкам — эквивалент Gumbel-Max
+        c = np.array([
+            np.random.choice(K, p=r_soft[m])
+            for m in range(n_clusters)
+        ])  # [M] — индекс эксперта для каждого кластера
+
+        for k in range(K):
+            b_k = [1 if c[m] == k else 0 for m in range(n_clusters)]
+            if sum(b_k) == 0:
+                if verbose:
+                    print(f"    S-step [C] round {round_i+1}, expert {k}: "
+                          f"empty b, skipping")
+                continue
+
+            val_acc = evaluate_architecture_on_subset(
+                configs[k], search_space, b_k,
+                X_train_by_cluster, y_train_by_cluster,
+                X_val, y_val,
+                epochs=cell_train_epochs,
+                val_cluster_ids=val_cluster_ids,
             )
-        return sample_random_b(n_clusters)
+            path = save_observation(configs[k], b_k, val_acc, save_dir, obs_index)
+            observation_paths.append(path)
+            obs_index += 1
+            new_count += 1
 
-    for _ in range(n_explore):
-        config = sample_valid_config(search_space)
-        b = _sample_b_c()
-
-        if surrogate is not None:
-            candidates = [sample_valid_config(search_space) for _ in range(n_candidates)]
-            b_vectors = [_sample_b_c() for _ in range(n_candidates)]
-
-            best_score = -float("inf")
-            best_config, best_b = config, b
-            for cand_config, cand_b in zip(candidates, b_vectors):
-                score = compute_ucb_score(
-                    surrogate, cand_config, cand_b,
-                    n_forward=n_mc_forward, device=device,
-                )
-                if score > best_score:
-                    best_score = score
-                    best_config = cand_config
-                    best_b = cand_b
-            config, b = best_config, best_b
-
-        val_acc = evaluate_architecture_on_subset(
-            config, search_space, b,
-            X_train_by_cluster, y_train_by_cluster,
-            X_val, y_val,
-            epochs=cell_train_epochs,
-            val_cluster_ids=val_cluster_ids,
-        )
-        path = save_observation(config, b, val_acc, save_dir, obs_index)
-        observation_paths.append(path)
-        obs_index += 1
-        new_count += 1
-
-        if verbose:
-            print(f"    S-step [C] explore: b={b}, acc={val_acc:.4f}")
+            if verbose:
+                clusters = [m for m in range(n_clusters) if b_k[m] == 1]
+                print(f"    S-step [C] round {round_i+1}, expert {k}: "
+                      f"|b|={sum(b_k)}, clusters={clusters[:8]}"
+                      f"{'...' if len(clusters) > 8 else ''}, "
+                      f"acc={val_acc:.4f}")
 
     return observation_paths, obs_index, phase_a_accs
 
@@ -985,6 +987,7 @@ def optimize_surrogate_em(
             observation_paths, obs_index, phase_a_accs = collect_s_step_observations(
                 configs=best_configs,
                 hard_assignments=hard_current,
+                r_soft=r_best,
                 M=M, K=K,
                 search_space=search_space,
                 surrogate=surrogate,
