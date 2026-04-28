@@ -960,20 +960,15 @@ def optimize_surrogate_em(
 
         hard_for_arch = discretize_assignments(r_np_current)
 
-        # First try: lookup best architectures from observations
-        obs_configs = find_best_archs_from_observations(
-            observation_paths, hard_for_arch, K, n_clusters,
+        # Surrogate-guided selection: для каждого эксперта сэмплируется
+        # n_arch_candidates архитектур, каждая оценивается суррогатом
+        # (MC Dropout + Gumbel-Softmax hard sampling из текущего soft r),
+        # выбирается с максимальным средним mu. Lookup в наблюдениях не
+        # используется — каждая EM-итерация даёт свежий surrogate-based выбор.
+        configs = sample_architectures_for_experts(
+            search_space, K, n_arch_candidates, surrogate,
+            logits.detach(), device,
         )
-        if obs_configs is not None:
-            configs = obs_configs
-        else:
-            # Fallback: surrogate-based selection.
-            # Pass logits directly — sampling of hard one-hot R happens inside
-            # (fresh Gumbel-Softmax per MC forward pass; honours current soft r).
-            configs = sample_architectures_for_experts(
-                search_space, K, n_arch_candidates, surrogate,
-                logits.detach(), device,
-            )
 
         # =============================================================
         # S-step: обновить суррогат (каждые surrogate_retrain_every итераций)
@@ -1028,14 +1023,6 @@ def optimize_surrogate_em(
                 base_model=surrogate,
                 cluster_centers=cluster_centers,
             )
-
-            # After S-step: lookup best architectures from observations
-            obs_configs = find_best_archs_from_observations(
-                observation_paths, hard_current, K, n_clusters,
-                verbose=verbose,
-            )
-            if obs_configs is not None:
-                configs = obs_configs
 
             if verbose:
                 tqdm.write(f"  S-step done: {len(observation_paths)} total "
