@@ -589,6 +589,7 @@ def optimize_surrogate_em(
     max_logit_spread: float = 0.0,
     load_balance_weight: float = 0.0,
     e_step_mc_samples: int = 0,
+    n_r_mc_samples: int = 1,
     # S-шаг параметры
     surrogate_retrain_every: int = 5,
     n_new_observations: int = 10,
@@ -900,18 +901,27 @@ def optimize_surrogate_em(
         for _r_step in range(n_r_gradient_steps):
             r_optimizer.zero_grad()
 
-            gumbel_r = gumbel_softmax_rows(logits, tau=tau, hard=True)
-            R_cols = gumbel_r.t()  # [K, M]
-
-            u_vals = surrogate_eval_with_prebatch(surrogate, graph_batch, R_cols)
-            u_vals = torch.clamp(u_vals, min=1e-10)
-
             r_soft = F.softmax(logits, dim=-1)
             log_r = torch.log(torch.clamp(r_soft, min=1e-10))
-            log_u = torch.log(u_vals)
 
-            log_ru = log_r + log_u.unsqueeze(0)
-            q_function = (q_tensor * log_ru).sum()
+            # Член Σ_mk q_mk · log r_mk — детерминирован, считается один раз
+            q_log_r = (q_tensor * log_r).sum()
+
+            # Член Σ_mk q_mk · log u(α_k, R_k) — стохастический,
+            # MC-усреднение по n_r_mc_samples сэмплам Gumbel-Softmax (hard).
+            # При n_r_mc_samples=1 — поведение как раньше.
+            log_u_acc = torch.zeros(logits.shape[-1], device=device)
+            for _ in range(n_r_mc_samples):
+                gumbel_r = gumbel_softmax_rows(logits, tau=tau, hard=True)
+                u_vals = surrogate_eval_with_prebatch(
+                    surrogate, graph_batch, gumbel_r.t(),
+                )
+                u_vals = torch.clamp(u_vals, min=1e-10)
+                log_u_acc = log_u_acc + torch.log(u_vals)
+            log_u_mean = log_u_acc / n_r_mc_samples  # [K]
+
+            q_log_u = (q_tensor * log_u_mean.unsqueeze(0)).sum()
+            q_function = q_log_r + q_log_u
 
             # Entropy regularization: поощряем сбалансированное назначение
             # H(r) = -Σ_m Σ_k r_mk * log(r_mk) — максимизируем энтропию
@@ -1115,6 +1125,12 @@ def main():
                              "0 = argmax (детерминированно, дефолт). "
                              ">=1 = усреднить u по T сэмплам R~r. "
                              "Рекомендуемые значения 10-20")
+    parser.add_argument("--n-r-mc-samples", type=int, default=1,
+                        help="Сколько Gumbel-сэмплов усреднить в один градиентный "
+                             "шаг по r на M-шаге. 1 = поведение по умолчанию "
+                             "(один сэмпл за шаг). Например --n-r-gradient-steps 1 "
+                             "--n-r-mc-samples 50 = один шаг с MC-градиентом "
+                             "усреднённым по 50 сэмплам")
 
     # S-шаг параметры
     parser.add_argument("--surrogate-retrain-every", type=int, default=5,
@@ -1204,6 +1220,7 @@ def main():
         max_logit_spread=args.max_logit_spread,
         load_balance_weight=args.load_balance_weight,
         e_step_mc_samples=args.e_step_mc_samples,
+        n_r_mc_samples=args.n_r_mc_samples,
         # S-step
         surrogate_retrain_every=args.surrogate_retrain_every,
         n_new_observations=args.n_new_observations,
