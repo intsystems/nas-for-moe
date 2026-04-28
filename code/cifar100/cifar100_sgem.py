@@ -398,6 +398,9 @@ def main():
     parser.add_argument("--load-balance-weight", type=float, default=0.05,
                         help="Штраф за коллапс экспертов "
                              "(K·Σ_k (mean_m r_mk)^2). 0=выкл")
+    parser.add_argument("--e-step-mc-samples", type=int, default=0,
+                        help="MC-сэмплы для E-шага через Gumbel-Max. "
+                             "0=argmax, >=1=усреднить u по T сэмплам R~r")
     parser.add_argument("--initial-surrogate-path", type=str, default=None,
                         help="Путь к предобученному суррогату (.pth)")
     parser.add_argument("--initial-obs-dir", type=str, default=None,
@@ -441,6 +444,7 @@ def main():
         entropy_weight_end=None,
         max_logit_spread=0.0,
         load_balance_weight=args.load_balance_weight,
+        e_step_mc_samples=args.e_step_mc_samples,
         # S-шаг
         surrogate_retrain_every=args.surrogate_retrain_every,
         n_new_observations=args.n_new_observations,

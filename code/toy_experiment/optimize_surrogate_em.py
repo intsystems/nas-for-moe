@@ -588,6 +588,7 @@ def optimize_surrogate_em(
     entropy_cutoff_frac: Optional[float] = None,
     max_logit_spread: float = 0.0,
     load_balance_weight: float = 0.0,
+    e_step_mc_samples: int = 0,
     # S-шаг параметры
     surrogate_retrain_every: int = 5,
     n_new_observations: int = 10,
@@ -830,19 +831,40 @@ def optimize_surrogate_em(
 
         # =============================================================
         # E-step: q_{mk} ∝ r_{mk} · u(α_k, R_k)
+        #
+        # u_k оценивается одним из двух способов:
+        #   - argmax (e_step_mc_samples=0): R_k = one_hot(argmax_k r_mk),
+        #     одна детерминированная оценка u(α_k, R_k_hard).
+        #   - MC Gumbel-Max (e_step_mc_samples>=1): T сэмплов
+        #     R^{(t)}_m ~ Categorical(r_m), усреднение u по сэмплам —
+        #     несмещённая оценка E_{R∼r}[u(α_k, R_k)].
         # =============================================================
         with torch.no_grad():
             r = F.softmax(logits, dim=-1)  # [M, K]
             r_np = r.cpu().numpy()
 
-            R_hard = r_to_hard_matrix(r_np)  # [M, K]
-            R_hard_columns = torch.tensor(
-                R_hard.T, dtype=torch.float, device=device,
-            )  # [K, M]
-
-            u_values = surrogate_eval_batch(
-                surrogate, configs, R_hard_columns, device,
-            )
+            if e_step_mc_samples <= 0:
+                # Argmax (детерминированно)
+                R_hard = r_to_hard_matrix(r_np)  # [M, K]
+                R_cols = torch.tensor(
+                    R_hard.T, dtype=torch.float, device=device,
+                )  # [K, M]
+                u_values = surrogate_eval_batch(
+                    surrogate, configs, R_cols, device,
+                )
+            else:
+                # Gumbel-Max MC: T сэмплов, усреднение
+                M_dim, K_dim = logits.shape
+                u_accum = torch.zeros(K_dim, device=device)
+                for _ in range(e_step_mc_samples):
+                    eps = torch.rand_like(logits).clamp_min(1e-20)
+                    gumbel = -torch.log(-torch.log(eps))
+                    idx = (logits + gumbel).argmax(dim=-1)  # [M]
+                    R = F.one_hot(idx, num_classes=K_dim).float()  # [M, K]
+                    u_accum += surrogate_eval_batch(
+                        surrogate, configs, R.t(), device,
+                    )
+                u_values = u_accum / e_step_mc_samples
             u_vals_np = np.maximum(u_values.cpu().numpy(), 1e-10)
 
         # q_{mk} = r_{mk} * u_k, нормализация по k
@@ -1088,6 +1110,11 @@ def main():
                         help="Штраф за коллапс экспертов: K·Σ_k (mean_m r_mk)^2. "
                              "Равен 1 при равномерном использовании, K при коллапсе. "
                              "Рекомендуемые значения 0.01-0.1")
+    parser.add_argument("--e-step-mc-samples", type=int, default=0,
+                        help="MC-сэмплы для E-шага через Gumbel-Max. "
+                             "0 = argmax (детерминированно, дефолт). "
+                             ">=1 = усреднить u по T сэмплам R~r. "
+                             "Рекомендуемые значения 10-20")
 
     # S-шаг параметры
     parser.add_argument("--surrogate-retrain-every", type=int, default=5,
@@ -1176,6 +1203,7 @@ def main():
         entropy_cutoff_frac=args.entropy_cutoff_frac,
         max_logit_spread=args.max_logit_spread,
         load_balance_weight=args.load_balance_weight,
+        e_step_mc_samples=args.e_step_mc_samples,
         # S-step
         surrogate_retrain_every=args.surrogate_retrain_every,
         n_new_observations=args.n_new_observations,
