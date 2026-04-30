@@ -414,6 +414,19 @@ def main():
                         help="Путь к предобученному суррогату (.pth)")
     parser.add_argument("--initial-obs-dir", type=str, default=None,
                         help="Директория с уже собранными obs_*.json")
+    # --- Финальное обучение MoE на найденных архитектурах ---
+    parser.add_argument("--final-moe-epochs", type=int, default=30,
+                        help="Эпохи финального обучения MoE на конфигах из SGEM. "
+                             "0 = отключить финальный этап")
+    parser.add_argument("--final-moe-mode", type=str, default="both",
+                        choices=["learnable", "cluster", "both"],
+                        help="learnable=обучаемый softmax-gating; "
+                             "cluster=жёсткий gating по hard_assignments; "
+                             "both=оба варианта (по очереди)")
+    parser.add_argument("--final-moe-batch-size", type=int, default=128)
+    parser.add_argument("--final-moe-lr", type=float, default=0.05)
+    parser.add_argument("--final-moe-wd", type=float, default=3e-4)
+    parser.add_argument("--final-moe-gate-channels", type=int, default=16)
     args = parser.parse_args()
 
     # --- Воспроизводимость и патчи ---
@@ -492,9 +505,59 @@ def main():
 
     print_result(result)
 
+    # --- Финальное обучение MoE на найденных архитектурах ---
+    final_moe: dict = {}
+    if args.final_moe_epochs > 0:
+        configs = result.configs
+        hard_assignments = result.hard_assignments
+        if not configs:
+            print("[final-moe] result.configs пуст — пропускаем финальное обучение")
+        else:
+            from cifar100_final_train import train_final_moe
+
+            modes = (
+                ["learnable", "cluster"]
+                if args.final_moe_mode == "both"
+                else [args.final_moe_mode]
+            )
+            if "cluster" in modes and hard_assignments is None:
+                print("[final-moe] hard_assignments отсутствуют — "
+                      "режим 'cluster' будет пропущен")
+                modes = [m for m in modes if m != "cluster"]
+
+            for mode in modes:
+                print(f"\n[final-moe] mode={mode}, K={len(configs)}, "
+                      f"epochs={args.final_moe_epochs}")
+                final_moe[mode] = train_final_moe(
+                    configs=configs,
+                    hard_assignments=hard_assignments,
+                    data_dir=data_dir,
+                    mode=mode,
+                    init_channels=args.init_channels,
+                    num_classes=_NUM_CLASSES,
+                    gate_channels=args.final_moe_gate_channels,
+                    epochs=args.final_moe_epochs,
+                    batch_size=args.final_moe_batch_size,
+                    lr=args.final_moe_lr,
+                    wd=args.final_moe_wd,
+                    seed=args.seed,
+                    device=args.device,
+                    verbose=True,
+                )
+            print("\n[final-moe] summary:")
+            for mode, r in final_moe.items():
+                print(f"  {mode:>10s}: val_acc = {r['val_acc']:.4f}")
+
     if args.save_results:
         from toy_experiment.optimize_expert_assignments import save_results
         save_results({"cifar100_sgem": result}, args.save_results)
+        if final_moe:
+            import json
+            with open(args.save_results, "r") as f:
+                saved = json.load(f)
+            saved["cifar100_sgem"]["final_moe"] = final_moe
+            with open(args.save_results, "w") as f:
+                json.dump(saved, f, indent=2)
         print(f"[main] saved results to {args.save_results}")
 
 
