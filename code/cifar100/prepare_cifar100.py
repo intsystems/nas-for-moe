@@ -9,6 +9,8 @@
     train_cluster_ids.npy   — ID кластера для каждой train-точки
     val_cluster_ids.npy     — ID кластера для каждой val-точки
     cluster_centers.npy     — центроиды KMeans [M, pca_dim]
+    pca_components.npy      — компоненты PCA [pca_dim, 3072] (для project_to_pca)
+    pca_mean.npy            — среднее PCA [3072] (в нормированном [0,1] флэт-пространстве)
     meta.json               — мета-информация (num_classes, class_list и т.д.)
 
 Пример:
@@ -117,6 +119,10 @@ def prepare_cifar100(
     np.save(output_dir / "train_cluster_ids.npy", train_cluster_ids)
     np.save(output_dir / "val_cluster_ids.npy", val_cluster_ids)
     np.save(output_dir / "cluster_centers.npy", cluster_centers)
+    # PCA — нужен для маршрутизации произвольного изображения к кластеру:
+    # x_pca = (x_flat/255 - pca_mean) @ pca_components.T
+    np.save(output_dir / "pca_components.npy", pca.components_.astype(np.float32))
+    np.save(output_dir / "pca_mean.npy", pca.mean_.astype(np.float32))
 
     meta = {
         "num_classes": num_classes,
@@ -138,7 +144,41 @@ def prepare_cifar100(
     print(f"  train/val:             {len(train_idx)} / {len(val_idx)}")
     print(f"  clusters:              {actual_n_clusters}")
     print(f"  cluster_centers.npy:   {cluster_centers.shape}")
+    print(f"  pca_components.npy:    {pca.components_.shape}")
+    print(f"  pca_mean.npy:          {pca.mean_.shape}")
     return meta
+
+
+def project_to_clusters(
+    X_uint8_chw: np.ndarray,
+    pca_components: np.ndarray,
+    pca_mean: np.ndarray,
+    cluster_centers: np.ndarray,
+) -> np.ndarray:
+    """Маршрутизация произвольных CIFAR-изображений к ближайшему кластеру.
+
+    Args:
+        X_uint8_chw: [N, 3, 32, 32] uint8 (CHW, как в data_X.npy).
+        pca_components: [pca_dim, 3072] float32 (из pca_components.npy).
+        pca_mean: [3072] float32 (из pca_mean.npy).
+        cluster_centers: [M, pca_dim] float32 (из cluster_centers.npy).
+
+    Returns:
+        cluster_ids: [N] int64.
+    """
+    N = X_uint8_chw.shape[0]
+    # CHW → HWC → flat, normalize to [0,1] (как при подготовке)
+    X_flat = (
+        X_uint8_chw.transpose(0, 2, 3, 1).reshape(N, -1).astype(np.float32) / 255.0
+    )
+    X_pca = (X_flat - pca_mean) @ pca_components.T
+    # Ближайший центроид
+    d2 = (
+        (X_pca ** 2).sum(axis=1, keepdims=True)
+        - 2.0 * X_pca @ cluster_centers.T
+        + (cluster_centers ** 2).sum(axis=1)
+    )
+    return d2.argmin(axis=1).astype(np.int64)
 
 
 def main():
@@ -147,13 +187,13 @@ def main():
     )
     parser.add_argument("--output-dir", type=str, default="./cifar100_data",
                         help="Директория для сохранения данных")
-    parser.add_argument("--n-classes", type=int, default=20,
+    parser.add_argument("--n-classes", type=int, default=100,
                         help="Число классов (первые N из 100)")
     parser.add_argument("--selected-classes", type=int, nargs="+", default=None,
                         help="Явный список классов (перебивает --n-classes)")
-    parser.add_argument("--fraction", type=float, default=1.0,
+    parser.add_argument("--fraction", type=float, default=0.7,
                         help="Доля датасета (0.0–1.0). Например, 0.5 = 50%% данных")
-    parser.add_argument("--n-clusters", type=int, default=20,
+    parser.add_argument("--n-clusters", type=int, default=30,
                         help="Число кластеров KMeans")
     parser.add_argument("--pca-dim", type=int, default=50,
                         help="Размерность PCA")

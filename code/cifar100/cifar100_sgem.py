@@ -27,6 +27,7 @@ Surrogate-EM (S-шаг) алгоритм на подмножестве CIFAR-100
     python cifar100_sgem.py --device cuda:0 --data-dir ./cifar100_data
 """
 
+import json
 import os
 import sys
 import random
@@ -427,6 +428,18 @@ def main():
     parser.add_argument("--final-moe-lr", type=float, default=0.05)
     parser.add_argument("--final-moe-wd", type=float, default=3e-4)
     parser.add_argument("--final-moe-gate-channels", type=int, default=16)
+    # --- Tracking истинного objective по ходу EM ---
+    parser.add_argument("--track-true-obj-every", type=int, default=0,
+                        help="Каждые N EM-итераций считать true objective "
+                             "(per-expert val_acc, обучая каждый α_k реально на R_k). "
+                             "0 = выкл")
+    parser.add_argument("--track-true-obj-path", type=str, default=None,
+                        help="Путь к JSON для истории true_obj. Default: "
+                             "<save-results>.true_obj.json")
+    parser.add_argument("--track-true-obj-epochs", type=int, default=30,
+                        help="Эпохи обучения каждого эксперта при tracking-eval")
+    parser.add_argument("--track-true-obj-device", type=str, default=None,
+                        help="Device для tracking-eval. Default: тот же, что --device")
     args = parser.parse_args()
 
     # --- Воспроизводимость и патчи ---
@@ -452,6 +465,55 @@ def main():
           f"EM-iters={args.n_em_iterations}, new-obs/iter={args.n_new_observations}, "
           f"retrain-every={args.surrogate_retrain_every}, "
           f"cell-epochs={args.cell_train_epochs}")
+
+    # --- Tracking-колбэк (true objective по ходу EM) ---
+    iter_callback = None
+    if args.track_true_obj_every > 0:
+        from eval_sgem_per_expert import evaluate_per_expert
+        track_path = Path(
+            args.track_true_obj_path
+            if args.track_true_obj_path
+            else (str(args.save_results or "./runs/sgem")
+                  .replace(".json", "") + ".true_obj.json")
+        )
+        track_path.parent.mkdir(parents=True, exist_ok=True)
+        track_device = args.track_true_obj_device or args.device
+        track_history: list = []
+        track_every = args.track_true_obj_every
+        track_epochs = args.track_true_obj_epochs
+
+        def _track_cb(em_iter, configs, hard_assignments, log_lik):
+            if em_iter % track_every != 0:
+                return
+            print(f"\n[track] EM iter {em_iter}: evaluating true objective...")
+            eval_block = evaluate_per_expert(
+                configs=configs,
+                hard_assignments=hard_assignments,
+                data_dir=data_dir,
+                epochs=track_epochs,
+                init_channels=args.init_channels,
+                device=track_device,
+                verbose=True,
+            )
+            entry = {
+                "em_iter": int(em_iter),
+                "surr_log_lik": float(log_lik),
+                "hard_assignments": [int(x) for x in hard_assignments],
+                **eval_block,
+            }
+            track_history.append(entry)
+            tmp = track_path.with_suffix(track_path.suffix + ".tmp")
+            with open(tmp, "w") as f:
+                json.dump({"true_obj_history": track_history}, f, indent=2)
+            tmp.replace(track_path)
+            print(f"[track] iter {em_iter}: true_obj={eval_block['true_objective']:.4f} "
+                  f"weighted_val_acc={eval_block['weighted_val_acc']:.4f} "
+                  f"K_eff={eval_block['K_eff']:.2f} "
+                  f"(surr {log_lik:.4f}) → {track_path}")
+
+        iter_callback = _track_cb
+        print(f"[main] true-obj tracking every {track_every} iters → {track_path} "
+              f"(device={track_device})")
 
     result = optimize_surrogate_em(
         X=X, y=y, cluster_dir=str(data_dir),
@@ -501,6 +563,7 @@ def main():
         exhaustive_refine=False,
         device=args.device,
         verbose=True,
+        iter_callback=iter_callback,
     )
 
     print_result(result)
@@ -552,7 +615,6 @@ def main():
         from toy_experiment.optimize_expert_assignments import save_results
         save_results({"cifar100_sgem": result}, args.save_results)
         if final_moe:
-            import json
             with open(args.save_results, "r") as f:
                 saved = json.load(f)
             saved["cifar100_sgem"]["final_moe"] = final_moe

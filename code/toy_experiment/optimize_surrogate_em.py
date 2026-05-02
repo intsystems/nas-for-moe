@@ -29,7 +29,7 @@ import json
 import os
 import argparse
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import Callable, List, Tuple, Optional
 
 import numpy as np
 import torch
@@ -637,6 +637,8 @@ def optimize_surrogate_em(
     # Общее
     device: str = "cpu",
     verbose: bool = True,
+    # Внешний хук (вызывается в конце каждой EM-итерации)
+    iter_callback: Optional[Callable] = None,
 ) -> OptimizationResult:
     """
     EM-алгоритм с S-шагом (одновременное обучение суррогата).
@@ -1043,6 +1045,22 @@ def optimize_surrogate_em(
             if verbose:
                 tqdm.write(f"  S-step done: {len(observation_paths)} total "
                            f"observations\n")
+
+        # --- Внешний колбэк по итогам итерации ---
+        if iter_callback is not None:
+            with torch.no_grad():
+                r_iter = F.softmax(logits, dim=-1).cpu().numpy()
+            hard_iter = discretize_assignments(r_iter)
+            try:
+                iter_callback(
+                    em_iter=em_iter,
+                    configs=copy.deepcopy(configs),
+                    hard_assignments=list(hard_iter),
+                    log_lik=float(log_lik),
+                )
+            except Exception as exc:
+                if verbose:
+                    tqdm.write(f"  [iter_callback] error: {exc}")
 
     # --- Post-EM architecture refinement ---
     with torch.no_grad():
