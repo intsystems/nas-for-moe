@@ -1,0 +1,227 @@
+\section{Main Part}
+\label{sec:main_part}
+
+\subsection{Surrogate Function}
+\label{subsec:surr}
+
+Direct optimisation of Problem~\ref{eq:moes_decomposed} requires
+repeatedly training neural networks for many architecture candidates,
+which is prohibitively expensive in the MoE setting where each
+evaluation already involves $K$ networks. To address this
+computational bottleneck we replace exact training by a learned
+surrogate model.
+
+\begin{figure}[h]
+	\centering
+    \includegraphics[width=0.9\textwidth]{main_frame}
+	\caption{Method workflow: a surrogate model $u$ is used to select
+    the most suitable expert architectures for each cluster.}
+	\label{fig:graph_compare}
+\end{figure}
+
+\begin{definition}
+\label{def:surrogate}
+Let the training data be partitioned into $M$ clusters
+$\mathcal{D}_{\text{train}} = \mathcal{C}_1 \cup \cdots \cup \mathcal{C}_M$,
+and for $\boldsymbol{b} \in \{0, 1\}^M$ let
+$\mathcal{D}_{\boldsymbol{b}} = \bigcup_{m: b_m = 1} \mathcal{C}_m$ be
+the cluster subset selected by~$\boldsymbol{b}$. A \emph{surrogate function}
+\begin{equation}
+u: \mathcal{A} \times \{0, 1\}^M \to \mathbb{R}, \qquad
+u(\boldsymbol{\alpha}, \boldsymbol{b}) \approx
+\mathrm{acc}_{\mathrm{val}}\!\left(f(\boldsymbol{\alpha}, \boldsymbol{w}^*_{\boldsymbol{\alpha}, \boldsymbol{b}})\right),
+\end{equation}
+predicts the validation accuracy of architecture $\boldsymbol{\alpha}$
+when trained on $\mathcal{D}_{\boldsymbol{b}}$, without performing
+the actual training.
+\end{definition}
+
+The surrogate is trained on a dataset of architecture/subset pairs
+collected by genuine training:
+\begin{equation}
+\mathcal{D}_{\text{surr}} = \{(\boldsymbol{\alpha}^{(i)}, \boldsymbol{b}^{(i)}, y^{(i)})\}_{i=1}^{N}, \qquad
+y^{(i)} = \mathrm{acc}_{\mathrm{val}}\!\bigl(f(\boldsymbol{\alpha}^{(i)}, \boldsymbol{w}^*_{\boldsymbol{\alpha}^{(i)}, \boldsymbol{b}^{(i)}})\bigr).
+\end{equation}
+We parametrise $u_{\boldsymbol{\theta}}$ as a Graph Neural Network
+encoder over the architecture DAG concatenated with an embedding of
+the cluster mask $\boldsymbol{b}$, and minimise the mean squared
+regression loss
+\begin{equation}
+\label{eq:surr_training}
+\min_{\boldsymbol{\theta}} \;
+\frac{1}{|\mathcal{D}_{\text{surr}}|}
+\sum_{(\boldsymbol{\alpha}, \boldsymbol{b}, y) \in \mathcal{D}_{\text{surr}}}
+\bigl(u_{\boldsymbol{\theta}}(\boldsymbol{\alpha}, \boldsymbol{b}) - y\bigr)^2.
+\end{equation}
+
+\paragraph{Active learning with MC Dropout.}
+The surrogate is refined inside an active learning loop. At every
+iteration we use Monte-Carlo dropout to obtain a predictive mean
+$\mu(\boldsymbol{\alpha}, \boldsymbol{b})$ and standard deviation
+$\sigma(\boldsymbol{\alpha}, \boldsymbol{b})$ over $T$ stochastic
+forward passes, and score candidates by the Upper Confidence Bound
+$\mathrm{UCB} = \mu + \sigma$. The most promising candidate is
+trained from scratch, the resulting triple is appended to
+$\mathcal{D}_{\text{surr}}$, and the surrogate is refit. The crucial
+property of $u_{\boldsymbol{\theta}}$ is that it is trained
+\emph{only on discrete} masks $\boldsymbol{b}$; differentiable
+optimisation must therefore be combined with a relaxation of the
+discrete inputs.
+
+\subsection{Surrogate-assisted Generalized EM (SAGEM)}
+\label{subsec:sgem}
+
+Treating the cluster$\to$expert routing as a latent variable yields a
+natural Expectation--Maximisation procedure on
+\eqref{eq:moe_objective}, in which the surrogate $u^{(t)}$ replaces
+the otherwise-intractable expert quality.
+
+\textbf{E-step.} For fixed $(\boldsymbol{\alpha}_{1:K}, \mathbf{r})$,
+compute responsibilities
+\begin{equation}
+q_{mk} \;\propto\; r_{mk}\, u(\boldsymbol{\alpha}_k, \mathbf{R}_k),
+\qquad \sum_{k=1}^{K} q_{mk} = 1.
+\end{equation}
+
+\textbf{M-step (routing).} Maximise
+$\sum_{m,k} q_{mk}\bigl[\log r_{mk} + \log u(\boldsymbol{\alpha}_k, \mathbf{R}_k)\bigr]$
+over $\mathbf{r}$ via gradient ascent on the logits, again with a
+straight-through Gumbel-Softmax for $\mathbf{R}_k$.
+
+\textbf{M-step (architectures).} For each expert $k$ sample new
+candidates $\boldsymbol{\alpha}_k^{\text{new}}$ from the search space
+and accept whenever
+$u(\boldsymbol{\alpha}_k^{\text{new}}, \mathbf{R}_k)
+> u(\boldsymbol{\alpha}_k, \mathbf{R}_k)$.
+
+\paragraph{Load-balancing penalty.}
+Because the surrogate is biased towards the strongest expert seen
+during data collection, the EM dynamics tend to collapse all clusters
+onto a single expert. We mitigate this by adding to the M-step
+objective a load-balancing penalty
+\begin{equation}
+\mathrm{LB}(\mathbf{r}) \;=\; K \cdot
+\sum_{k=1}^{K}\bar{r}_k \cdot p_k, \qquad
+\bar{r}_k = \frac{1}{M}\sum_{m=1}^{M} r_{mk}, \quad
+p_k = \frac{|\{m : \arg\max_{k'} r_{mk'} = k\}|}{M},
+\end{equation}
+weighted by a coefficient $\lambda_{\text{LB}}$. This penalty is
+minimal when the routing is uniform across experts and saturates at
+$K$ under full collapse, providing the regulariser used in our
+experiments.
+
+\begin{algorithm}[h]
+\caption{Surrogate-assisted Generalized EM (SAGEM) for MoE Architecture Search}
+\label{alg:sgem}
+\begin{algorithmic}[1]
+\Require Surrogate $u_{\boldsymbol{\theta}}$, search space
+$\mathcal{A}$, number of experts~$K$, clusters $M$,
+weight $\lambda_{\text{LB}}$, EM iterations $T$.
+\State Initialise architectures
+$\boldsymbol{\alpha}_1, \dots, \boldsymbol{\alpha}_K$ at random and
+logits $\boldsymbol{\ell}\!\in\!\mathbb{R}^{M\times K}\!\sim\!\mathcal{N}(\mathbf{0}, I)$.
+\For{$t = 1$ to $T$}
+    \State \textbf{E-step.} $\;q_{mk} \propto r_{mk}\, u(\boldsymbol{\alpha}_k, \mathbf{R}_k)$.
+    \State \textbf{M-step (r).} Gradient ascent on
+    $\sum q_{mk}[\log r_{mk} + \log u] - \lambda_{\text{LB}}\,\mathrm{LB}(\mathbf{r})$
+    using straight-through Gumbel-Softmax for $\mathbf{R}_k$.
+    \State \textbf{M-step ($\boldsymbol{\alpha}$).} For each expert
+    $k$, sample candidates and keep the best under $u(\cdot, \mathbf{R}_k)$.
+    \State \textbf{Active learning step.} Train selected candidates,
+    update $\mathcal{D}_{\text{surr}}$, refit $u_{\boldsymbol{\theta}}$.
+\EndFor
+\State \Return $\boldsymbol{\alpha}_{1:K}$ and hard assignment
+$\hat{r}_{mk} = \mathbb{1}[k = \arg\max_{k'} r_{mk'}]$.
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Convergence Analysis}
+\label{subsec:theory}
+
+A natural concern with Algorithm~\ref{alg:sgem} is that the surrogate
+$u^{(t)}$ used inside the E- and M-steps is itself updated across
+iterations, so the classical monotonicity argument for
+EM~\cite{dempster1977em,wu1983convergence} no longer applies
+directly. We show that, provided the surrogate error decays fast
+enough, SAGEM still converges in the same sense as Generalised EM.
+
+Let $u_{\mathrm{true}}$ denote the (unknown) ground-truth expert
+quality. Define the per-iteration surrogate error
+\begin{equation}
+\varepsilon_t \;=\; \sup_{\boldsymbol{\alpha} \in \mathcal{A}, \;
+\boldsymbol{R} \in [0, 1]^M}
+\bigl|\log u^{(t)}(\boldsymbol{\alpha}, \boldsymbol{R})
+\;-\; \log u_{\mathrm{true}}(\boldsymbol{\alpha}, \boldsymbol{R})\bigr|,
+\end{equation}
+the parameter $\theta = (\boldsymbol{\alpha}_{1:K}, \mathbf{r})$ on
+the compact set
+$\Theta = \mathcal{A}^K \times (\Delta_K)^M$, the true log-likelihood
+$L_{\mathrm{true}}(\theta) = \sum_m \log \sum_k r_{mk}
+u_{\mathrm{true}}(\boldsymbol{\alpha}_k, \mathbf{R}_k)$ and the
+\emph{true} Q-function
+$Q_{\mathrm{true}}(\theta; \theta') = \sum_{m,k} w_{mk}(\theta')
+\log\!\bigl(r_{mk}\, u_{\mathrm{true}}(\boldsymbol{\alpha}_k, \mathbf{R}_k)\bigr)$
+with $w_{mk}(\theta')$ the responsibilities computed under
+$u_{\mathrm{true}}$.
+
+\begin{assumption}
+\label{ass:bounded}
+There exist $0 < c \leq C < \infty$ such that
+$c \leq u_{\mathrm{true}}(\boldsymbol{\alpha}, \mathbf{R}),\,
+u^{(t)}(\boldsymbol{\alpha}, \mathbf{R}) \leq C$ for all
+$\boldsymbol{\alpha}\in\mathcal{A}$, $\mathbf{R}\in[0,1]^M$, $t\geq 0$.
+\end{assumption}
+
+\begin{assumption}
+\label{ass:summable}
+The surrogate errors are summable: $\sum_{t=0}^{\infty} \varepsilon_t < \infty$.
+\end{assumption}
+
+\begin{assumption}
+\label{ass:gem}
+The M-step of Algorithm~\ref{alg:sgem} is generalised, i.e.\ for every
+$t$ it returns $\theta^{(t+1)}$ with
+$\mathcal{F}_{u^{(t)}}(q^{(t)}, \theta^{(t+1)})
+\geq \mathcal{F}_{u^{(t)}}(q^{(t)}, \theta^{(t)})$,
+where $\mathcal{F}_v(q, \theta) = \sum_{m,k} q_{mk}
+\log\!\bigl(r_{mk} v(\boldsymbol{\alpha}_k, \mathbf{R}_k)/q_{mk}\bigr)$
+is the variational free energy.
+\end{assumption}
+
+\begin{assumption}
+\label{ass:cont}
+For every $\boldsymbol{\alpha}\in\mathcal{A}$ the map
+$\mathbf{R}\mapsto u_{\mathrm{true}}(\boldsymbol{\alpha}, \mathbf{R})$
+is continuous on $[0,1]^M$.
+\end{assumption}
+
+\begin{theorem}[Convergence of SAGEM with adaptive surrogate]
+\label{thm:sgem}
+Under Assumptions~\ref{ass:bounded}--\ref{ass:cont}, the iterates
+$\{\theta^{(t)}\}$ produced by Algorithm~\ref{alg:sgem} satisfy
+\begin{enumerate}
+\item[\textup{(a)}] the sequence $\{L_{\mathrm{true}}(\theta^{(t)})\}$ converges;
+\item[\textup{(b)}] every limit point $\theta^{\star}$ is a
+stationary point of $L_{\mathrm{true}}$ on $\Theta$, in the sense
+$Q_{\mathrm{true}}(\theta;\theta^{\star}) \leq
+Q_{\mathrm{true}}(\theta^{\star};\theta^{\star})$
+for every $\theta\in\Theta$.
+\end{enumerate}
+\end{theorem}
+
+The proof, together with the auxiliary lemmas (uniform deviation of
+the ELBO, stability of the softmax responsibilities, and a
+quasi-monotonicity bound
+$L_{\mathrm{true}}(\theta^{(t+1)}) \geq L_{\mathrm{true}}(\theta^{(t)})
+- 2M\varepsilon_t$ established via a Robbins--Siegmund argument),
+is given in Appendix~\ref{sec:proof}.
+
+\begin{remark}
+The summability assumption~\ref{ass:summable} is the surrogate
+analogue of the diminishing step-size condition in stochastic
+EM~\cite{dempster1977em}; replacing it by the weaker condition
+$\varepsilon_t\to 0$ preserves part~(b) of Theorem~\ref{thm:sgem} but
+not part~(a). Practically, summability is achieved whenever the
+active learning step in Algorithm~\ref{alg:sgem} provides
+sufficiently rich coverage of $\mathcal{A}\times[0,1]^M$.
+\end{remark}

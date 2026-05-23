@@ -1,0 +1,250 @@
+\section{Proof of Theorem~\ref{thm:sgem}}
+\label{sec:proof}
+
+This appendix collects the lemmas and the full proof of
+Theorem~\ref{thm:sgem}. We follow the notation of
+Section~\ref{subsec:theory}: $\theta = (\boldsymbol{\alpha}_{1:K}, \mathbf{r})
+\in \Theta = \mathcal{A}^K \times (\Delta_K)^M$ with $\mathcal{A}$
+finite, $\varepsilon_t$ is the per-iteration surrogate error,
+$\mathcal{F}_v$ is the variational free energy
+\begin{equation*}
+\mathcal{F}_v(q, \theta) \;=\; \sum_{m=1}^{M}\sum_{k=1}^{K}
+q_{mk}\, \log \frac{r_{mk}\, v(\boldsymbol{\alpha}_k, \mathbf{R}_k)}{q_{mk}},
+\end{equation*}
+and $L_v(\theta) = \max_q \mathcal{F}_v(q, \theta)$ is the
+log-likelihood induced by quality function $v$. We write
+$L_{\mathrm{true}} = L_{u_{\mathrm{true}}}$ and
+$L^{(t)} = L_{u^{(t)}}$.
+
+\subsection{Variational Representation of the Log-Likelihood}
+
+\begin{proposition}[ELBO maximisation]
+\label{prop:elbo}
+For every quality function $v$ and every $\theta\in\Theta$,
+$L_v(\theta) = \max_{q\in\mathcal{Q}} \mathcal{F}_v(q, \theta)$ with
+the maximum attained at
+$q^{\star}_{mk}(\theta) = r_{mk}\,v(\boldsymbol{\alpha}_k, \mathbf{R}_k)
+\,/\,\sum_{j} r_{mj}\,v(\boldsymbol{\alpha}_j, \mathbf{R}_j)$.
+\end{proposition}
+
+\begin{proof}
+Fix $\theta$ and $m$. Writing $a_{mk} = r_{mk}\,
+v(\boldsymbol{\alpha}_k, \mathbf{R}_k)$ and using
+$\sum_k q_{mk} = 1$, the inner term equals
+$-\mathrm{KL}(q_{m,:} \| a_{m,:}/\!\sum_j a_{mj}) + \log\sum_j a_{mj}$.
+The KL-divergence is non-negative and vanishes exactly at
+$q_{mk} = a_{mk}/\sum_j a_{mj}$, which yields the claim.
+\end{proof}
+
+A consequence is the Neal--Hinton decomposition
+$L_v(\theta) = \mathcal{F}_v(q, \theta) + \sum_m
+\mathrm{KL}\!\bigl(q_{m,:}\|q^{\star}_{m,:}(\theta)\bigr)$,
+implying $L_v(\theta) \geq \mathcal{F}_v(q,\theta)$ with equality iff
+$q = q^{\star}(\theta)$.
+
+\subsection{Uniform ELBO and Likelihood Deviation}
+
+\begin{lemma}[Uniform ELBO deviation]
+\label{lem:elbo-dev}
+Under Assumption~\ref{ass:bounded}, for every $q$, $\theta$, $t$,
+$\bigl|\mathcal{F}_{u_{\mathrm{true}}}(q,\theta) -
+\mathcal{F}_{u^{(t)}}(q,\theta)\bigr| \leq M\,\varepsilon_t$.
+\end{lemma}
+
+\begin{proof}
+The terms $\log r_{mk}$ and $-\log q_{mk}$ cancel between the two
+ELBOs, leaving
+$\mathcal{F}_{u_{\mathrm{true}}} - \mathcal{F}_{u^{(t)}}
+= \sum_m\!\sum_k q_{mk}\bigl[\log u_{\mathrm{true}} - \log u^{(t)}\bigr]$.
+Bounding $|\log u_{\mathrm{true}} - \log u^{(t)}| \leq \varepsilon_t$
+and using $\sum_k q_{mk} = 1$ gives the claim.
+\end{proof}
+
+\begin{corollary}
+\label{cor:lik-dev}
+For every $\theta$, $|L_{\mathrm{true}}(\theta) - L^{(t)}(\theta)|
+\leq M\,\varepsilon_t$.
+\end{corollary}
+
+\begin{proof}
+Apply Lemma~\ref{lem:elbo-dev} to the maxima of the two ELBOs and
+use $|\max_q f - \max_q g| \leq \sup_q |f - g|$.
+\end{proof}
+
+\subsection{Quasi-Monotonicity}
+
+\begin{proposition}[Quasi-monotonicity of $L_{\mathrm{true}}$]
+\label{prop:quasi-mono}
+Under Assumptions~\ref{ass:bounded}--\ref{ass:gem}, for every $t$,
+\begin{equation}
+\label{eq:quasi-mono}
+L_{\mathrm{true}}(\theta^{(t+1)}) \;\geq\;
+L_{\mathrm{true}}(\theta^{(t)}) \;-\; 2M\,\varepsilon_t.
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+We chain five inequalities. First,
+$L_{\mathrm{true}}(\theta^{(t+1)}) \geq
+\mathcal{F}_{u_{\mathrm{true}}}(q^{(t)}, \theta^{(t+1)})$ since
+$L_v(\theta) = \max_q \mathcal{F}_v(q,\theta)$. Second, by
+Lemma~\ref{lem:elbo-dev},
+$\mathcal{F}_{u_{\mathrm{true}}}(q^{(t)}, \theta^{(t+1)})
+\geq \mathcal{F}_{u^{(t)}}(q^{(t)}, \theta^{(t+1)}) - M\varepsilon_t$.
+Third, the GEM Assumption~\ref{ass:gem} yields
+$\mathcal{F}_{u^{(t)}}(q^{(t)}, \theta^{(t+1)})
+\geq \mathcal{F}_{u^{(t)}}(q^{(t)}, \theta^{(t)})$. Fourth, the
+E-step makes the latter equal to $L^{(t)}(\theta^{(t)})$. Fifth,
+Corollary~\ref{cor:lik-dev} gives $L^{(t)}(\theta^{(t)}) \geq
+L_{\mathrm{true}}(\theta^{(t)}) - M\varepsilon_t$. Combining the
+five steps yields~\eqref{eq:quasi-mono}.
+\end{proof}
+
+\subsection{Proof of Theorem~\ref{thm:sgem}(a)}
+
+Set $L_{\max} = \sup_{\theta\in\Theta} L_{\mathrm{true}}(\theta)$,
+which is finite because $\Theta$ is compact (Assumption~\ref{ass:cont}
+and finiteness of $\mathcal{A}$). Define
+$V_t = L_{\max} - L_{\mathrm{true}}(\theta^{(t)}) \geq 0$. From
+Proposition~\ref{prop:quasi-mono},
+\begin{equation*}
+V_{t+1} \;\leq\; V_t \;+\; 2M\varepsilon_t,
+\qquad \sum_{t=0}^{\infty} 2M\varepsilon_t < \infty
+\;\;\text{by Assumption~\ref{ass:summable}.}
+\end{equation*}
+The Robbins--Siegmund theorem~\cite{robbins1971convergence} (with
+$a_t = 0$, $b_t = 2M\varepsilon_t$) implies that $\{V_t\}$ converges,
+hence $\{L_{\mathrm{true}}(\theta^{(t)})\}$ converges. \qed
+
+\subsection{Stability Lemmas for the M-step Analysis}
+
+To analyse limit points we need two stability statements that compare
+the surrogate-based and the true responsibilities.
+
+\begin{lemma}[Softmax stability]
+\label{lem:softmax}
+Let $a_k, \tilde a_k > 0$ satisfy
+$e^{-\varepsilon} a_k \leq \tilde a_k \leq e^{\varepsilon} a_k$. Then
+the normalised vectors $p_k = a_k/\sum_j a_j$ and
+$\tilde p_k = \tilde a_k/\sum_j \tilde a_j$ obey
+$|\tilde p_k - p_k| \leq (e^{2\varepsilon} - 1)\,p_k \leq 3\varepsilon\,p_k$
+for $\varepsilon \leq 1$.
+\end{lemma}
+
+\begin{proof}
+$\tilde p_k \leq a_k e^{\varepsilon}/\sum_j a_j e^{-\varepsilon}
+= p_k\,e^{2\varepsilon}$ and similarly $\tilde p_k \geq p_k\,e^{-2\varepsilon}$.
+\end{proof}
+
+\begin{lemma}[Responsibility deviation]
+\label{lem:resp}
+Let $w_{mk}(\theta) = q^{\star}_{mk}(\theta)$ be the
+true-surrogate responsibilities (Proposition~\ref{prop:elbo} with
+$v = u_{\mathrm{true}}$) and $q^{(t)}_{mk}$ the surrogate
+responsibilities of the E-step at iteration $t$. For
+$\varepsilon_t \leq 1$,
+$|q^{(t)}_{mk} - w_{mk}(\theta^{(t)})| \leq 3\varepsilon_t\,
+w_{mk}(\theta^{(t)})$.
+\end{lemma}
+
+\begin{proof}
+Apply Lemma~\ref{lem:softmax} with
+$a_{mk} = r^{(t)}_{mk}\,u_{\mathrm{true}}(\boldsymbol{\alpha}^{(t)}_k, \mathbf{R}^{(t)}_k)$
+and $\tilde a_{mk}$ obtained by replacing $u_{\mathrm{true}}$ by
+$u^{(t)}$.
+\end{proof}
+
+\begin{lemma}[Q-function deviation]
+\label{lem:qdev}
+Define
+$\tilde Q^{(t)}(\theta;\theta') = \sum_{m,k} q^{(t)}_{mk}(\theta')
+\log\!\bigl(r_{mk}\,u^{(t)}(\boldsymbol{\alpha}_k, \mathbf{R}_k)\bigr)$.
+Under Assumption~\ref{ass:bounded} there exists a constant
+$C_Q = C_Q(M, K, c, C)$ such that for every $\theta, \theta'$ and
+every $t$ with $\varepsilon_t \leq 1$,
+$|\tilde Q^{(t)}(\theta;\theta') - Q_{\mathrm{true}}(\theta;\theta')|
+\leq C_Q\,\varepsilon_t$.
+\end{lemma}
+
+\begin{proof}
+Add and subtract $\sum_{m,k} q^{(t)}_{mk}\log\!\bigl(r_{mk}
+u_{\mathrm{true}}(\boldsymbol{\alpha}_k, \mathbf{R}_k)\bigr)$. The
+first piece, the surrogate-error term, is bounded by $M\varepsilon_t$.
+The remainder splits as
+$\sum_{m,k}(q^{(t)}_{mk} - w_{mk})\log u_{\mathrm{true}}$ and
+$\sum_{m,k}(q^{(t)}_{mk} - w_{mk})\log r_{mk}$. The first is bounded
+by $3MK\Lambda\varepsilon_t$ with
+$\Lambda = \max(|\log c|, |\log C|)$ via Lemma~\ref{lem:resp}. For
+the second, using $|x\log x|\leq 1/e$ on $[0,1]$ and the
+$3\varepsilon_t/(cK)\cdot C$ bound on the inner softmax difference
+(Lemma~\ref{lem:softmax}), one obtains a bound of
+$3MC\varepsilon_t/(ec)$. Summing the three contributions gives the
+claim with
+$C_Q = M(1 + 3K\Lambda + 3C/(ec))$.
+\end{proof}
+
+\subsection{Proof of Theorem~\ref{thm:sgem}(b)}
+
+\textbf{Step 1: existence.} $\Theta$ is compact, so
+$\{\theta^{(t)}\}$ has at least one limit point
+$\theta^{\star} = \lim_{j\to\infty} \theta^{(t_j)}$.
+
+\textbf{Step 2: contradiction setup.} Suppose $\theta^{\star}$ is not
+stationary: there is $\theta'\in\Theta$ and $\delta > 0$ with
+$Q_{\mathrm{true}}(\theta';\theta^{\star}) -
+Q_{\mathrm{true}}(\theta^{\star};\theta^{\star}) = \delta > 0$.
+
+\textbf{Step 3: continuity.} The map $\theta'\mapsto Q_{\mathrm{true}}(\theta;\theta')$
+is continuous on $\Theta$: $w_{mk}(\theta')$ is continuous because
+$u_{\mathrm{true}}$ is continuous in $\mathbf{R}$
+(Assumption~\ref{ass:cont}) and softmax is continuous; and the
+product $w_{mk}\log r_{mk}$ extends continuously to $r_{mk} = 0$
+because $w_{mk} = O(r_{mk})$ and $r\mapsto r\log r$ is continuous at
+$0$. Thus, for $j$ large enough,
+$Q_{\mathrm{true}}(\theta';\theta^{(t_j)}) -
+Q_{\mathrm{true}}(\theta^{(t_j)};\theta^{(t_j)}) \geq \delta/2$.
+
+\textbf{Step 4: transfer to $\tilde Q$.} By Lemma~\ref{lem:qdev},
+\begin{equation*}
+\tilde Q^{(t_j)}(\theta';\theta^{(t_j)}) -
+\tilde Q^{(t_j)}(\theta^{(t_j)};\theta^{(t_j)}) \;\geq\;
+\delta/2 - 2C_Q\,\varepsilon_{t_j} \;\geq\; \delta/4
+\end{equation*}
+for $j$ large enough, since $\varepsilon_{t_j}\to 0$.
+
+\textbf{Step 5: GEM ascent.} Because the M-step searches over a
+candidate set that contains $\theta'$ (by finiteness of $\mathcal{A}$
+and the closure properties of the $\mathbf{r}$-update),
+$\tilde Q^{(t_j)}(\theta^{(t_j+1)};\theta^{(t_j)}) \geq
+\tilde Q^{(t_j)}(\theta';\theta^{(t_j)})$. Translating back through
+Lemma~\ref{lem:qdev} once more,
+\begin{equation*}
+\Delta_{t_j} := Q_{\mathrm{true}}(\theta^{(t_j+1)};\theta^{(t_j)}) -
+Q_{\mathrm{true}}(\theta^{(t_j)};\theta^{(t_j)}) \;\geq\;
+\delta/4 - 2C_Q\,\varepsilon_{t_j} \;\geq\; \delta/8
+\end{equation*}
+for $j$ large enough.
+
+\textbf{Step 6: summability contradiction.} The Gibbs inequality
+$L_{\mathrm{true}}(\theta^{(t+1)}) - L_{\mathrm{true}}(\theta^{(t)})
+\geq \Delta_t$ together with Proposition~\ref{prop:quasi-mono}
+implies $\Delta_t \geq -2M\varepsilon_t$. Hence the non-negative
+sequence $\Delta_t + 2M\varepsilon_t$ satisfies
+$\sum_t (\Delta_t + 2M\varepsilon_t) < \infty$ by
+Robbins--Siegmund applied to $V_t$, and consequently
+$\sum_t \Delta_t < \infty$. But Step~5 gives $\Delta_{t_j} \geq
+\delta/8$ for infinitely many $j$, yielding $\sum_t \Delta_t = +\infty$
+--- a contradiction. Therefore $\theta^{\star}$ is stationary. \qed
+
+\subsection{Convergence Rate}
+
+A by-product of the proof of Theorem~\ref{thm:sgem}(a) is the
+explicit rate
+\begin{equation}
+L_{\mathrm{true}}(\theta^{\star}) - L_{\mathrm{true}}(\theta^{(T)})
+\;\leq\; 2M \sum_{t = T}^{\infty} \varepsilon_t.
+\end{equation}
+If $\varepsilon_t = O(t^{-p})$ with $p > 1$, this gives
+$L_{\mathrm{true}}(\theta^{(T)}) \to L_{\mathrm{true}}(\theta^{\star})$
+at rate $O(T^{1 - p})$, matching the rate observed for stochastic-EM
+analyses~\cite{cappe2009online}.

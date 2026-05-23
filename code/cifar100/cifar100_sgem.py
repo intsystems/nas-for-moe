@@ -17,14 +17,15 @@ Surrogate-EM (S-шаг) алгоритм на подмножестве CIFAR-100
 Отличия от MNIST-версии:
     - 3-канальный вход (RGB, 32×32)
     - Нормализация CIFAR-100 (mean/std per channel)
-    - Данные готовятся отдельно: prepare_cifar100.py
+    - Данные готовятся отдельно: prepare_cifar100_semantic.py (3-way split)
 
 Запуск:
-    # 1. Подготовить данные
-    python prepare_cifar100.py --output-dir ./cifar100_data --n-classes 20 --fraction 0.5
+    # 1. Подготовить данные (с отложенным test-сплитом)
+    python prepare_cifar100_semantic.py --output-dir ./cifar100_data_semantic_testsplit \\
+        --fraction 0.7 --n-clusters 30 --val-size 0.15 --test-size 0.15 --device cuda:0
 
-    # 2. Запустить SGEM
-    python cifar100_sgem.py --device cuda:0 --data-dir ./cifar100_data
+    # 2. Запустить SGEM (дефолтные пути уже указывают на _testsplit)
+    python cifar100_sgem.py --device cuda:0
 """
 
 import json
@@ -69,6 +70,19 @@ patch_toy_graph_ops()
 # ==========================================================================
 
 import toy_experiment.collect_dataset as collect_dataset  # noqa: E402
+
+
+def _json_safe(v):
+    """Convert argparse values to JSON-serialisable types."""
+    if isinstance(v, Path):
+        return str(v)
+    if isinstance(v, (str, int, float, bool)) or v is None:
+        return v
+    if isinstance(v, (list, tuple)):
+        return [_json_safe(x) for x in v]
+    if isinstance(v, dict):
+        return {str(k): _json_safe(x) for k, x in v.items()}
+    return str(v)
 import toy_experiment.optimize_expert_assignments as optimize_expert_assignments  # noqa: E402
 import optimize_surrogate_em as osem  # noqa: E402
 from optimize_surrogate_em import optimize_surrogate_em  # noqa: E402
@@ -206,15 +220,16 @@ def load_cifar100_meta(data_dir: Path) -> dict:
     meta_path = data_dir / "meta.json"
     required = [
         "data_X.npy", "data_y.npy",
-        "train_indices.npy", "val_indices.npy",
-        "train_cluster_ids.npy", "val_cluster_ids.npy",
+        "train_indices.npy", "val_indices.npy", "test_indices.npy",
+        "train_cluster_ids.npy", "val_cluster_ids.npy", "test_cluster_ids.npy",
         "cluster_centers.npy",
     ]
     missing = [f for f in required if not (data_dir / f).exists()]
     if missing:
         raise FileNotFoundError(
             f"Data not prepared in {data_dir}. Missing: {missing}\n"
-            f"Run prepare_cifar100.py first."
+            f"Run prepare_cifar100_semantic.py (or prepare_cifar100.py) first — "
+            f"note: the data layout now includes a held-out test split."
         )
     if not meta_path.exists():
         raise FileNotFoundError(
@@ -361,13 +376,16 @@ def main():
     parser = argparse.ArgumentParser(
         description="Surrogate-EM (SGEM) on CIFAR-100 subset"
     )
-    # --- Данные (подготовлены prepare_cifar100.py) ---
-    parser.add_argument("--data-dir", type=str, default="./cifar100_data",
-                        help="Директория с подготовленными данными (prepare_cifar100.py)")
+    # --- Данные (подготовлены prepare_cifar100_semantic.py) ---
+    parser.add_argument("--data-dir", type=str,
+                        default="./cifar100_data_semantic_testsplit",
+                        help="Директория с подготовленными данными "
+                             "(prepare_cifar100_semantic.py)")
     # --- Результаты ---
-    parser.add_argument("--save-dir", type=str, default="./runs/cifar100_sgem_obs")
+    parser.add_argument("--save-dir", type=str,
+                        default="./runs_testsplit/cifar100_sgem_obs")
     parser.add_argument("--save-results", type=str,
-                        default="./runs/results_cifar100_sgem.json")
+                        default="./runs_testsplit/results_cifar100_sgem.json")
     # --- MoE (M берётся из meta.json) ---
     parser.add_argument("--K", type=int, default=5)
     # --- Бюджет ---
@@ -416,9 +434,12 @@ def main():
     parser.add_argument("--initial-obs-dir", type=str, default=None,
                         help="Директория с уже собранными obs_*.json")
     # --- Финальное обучение MoE на найденных архитектурах ---
-    parser.add_argument("--final-moe-epochs", type=int, default=30,
-                        help="Эпохи финального обучения MoE на конфигах из SGEM. "
-                             "0 = отключить финальный этап")
+    # default=100 — согласовано с random-MoE / DARTS×K / finetune-arch
+    # (обучение на train ∪ val, единственная оценка на test).
+    parser.add_argument("--final-moe-epochs", type=int, default=100,
+                        help="Эпохи финального обучения MoE (на train ∪ val) "
+                             "на конфигах из SGEM. 0 = отключить финальный этап. "
+                             "По умолчанию 100 — как у остальных бейзлайнов.")
     parser.add_argument("--final-moe-mode", type=str, default="both",
                         choices=["learnable", "cluster", "both"],
                         help="learnable=обучаемый softmax-gating; "
@@ -473,7 +494,7 @@ def main():
         track_path = Path(
             args.track_true_obj_path
             if args.track_true_obj_path
-            else (str(args.save_results or "./runs/sgem")
+            else (str(args.save_results or "./runs_testsplit/sgem")
                   .replace(".json", "") + ".true_obj.json")
         )
         track_path.parent.mkdir(parents=True, exist_ok=True)
@@ -590,12 +611,14 @@ def main():
 
             for mode in modes:
                 print(f"\n[final-moe] mode={mode}, K={len(configs)}, "
-                      f"epochs={args.final_moe_epochs}")
+                      f"epochs={args.final_moe_epochs} "
+                      f"(train ∪ val → test)")
                 final_moe[mode] = train_final_moe(
                     configs=configs,
                     hard_assignments=hard_assignments,
                     data_dir=data_dir,
                     mode=mode,
+                    final=True,
                     init_channels=args.init_channels,
                     num_classes=_NUM_CLASSES,
                     gate_channels=args.final_moe_gate_channels,
@@ -609,17 +632,18 @@ def main():
                 )
             print("\n[final-moe] summary:")
             for mode, r in final_moe.items():
-                print(f"  {mode:>10s}: val_acc = {r['val_acc']:.4f}")
+                print(f"  {mode:>10s}: test_acc = {r['test_acc']:.4f}")
 
     if args.save_results:
         from toy_experiment.optimize_expert_assignments import save_results
         save_results({"cifar100_sgem": result}, args.save_results)
+        with open(args.save_results, "r") as f:
+            saved = json.load(f)
         if final_moe:
-            with open(args.save_results, "r") as f:
-                saved = json.load(f)
             saved["cifar100_sgem"]["final_moe"] = final_moe
-            with open(args.save_results, "w") as f:
-                json.dump(saved, f, indent=2)
+        saved["cifar100_sgem"]["args"] = {k: _json_safe(v) for k, v in vars(args).items()}
+        with open(args.save_results, "w") as f:
+            json.dump(saved, f, indent=2)
         print(f"[main] saved results to {args.save_results}")
 
 

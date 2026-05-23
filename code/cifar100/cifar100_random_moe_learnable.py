@@ -1,4 +1,4 @@
-"""Random-MoE-baseline: сэмплирование N MoE-конфигов, выбор лучшего.
+"""Random-MoE с learnable gating: сэмплирование N MoE-конфигов, выбор лучшего.
 
 Этапы:
     1. Сэмплируется N MoE-конфигураций. Каждая = K случайных архитектур
@@ -6,12 +6,18 @@
     2. Каждая MoE обучается end-to-end (learnable softmax-gating, без кластеров).
     3. Выбирается лучшая по val accuracy.
 
+После завершения random-search'а лучший MoE-кандидат обучается заново на
+train ∪ val на `--final-epochs` эпох (по умолчанию 100) и единственный раз
+оценивается на отложенном test. Результат пишется в JSON под ключом
+`final_moe` (метрика — `test_acc`). `--final-epochs 0` отключает этот этап.
+
 Это baseline без архитектурной специализации по кластерам — для сравнения с
 EM-методом (который такую специализацию ищет явно).
 
 Запуск:
-    python cifar100_random_moe_baseline.py --device cuda:0 \\
-        --data-dir ./cifar100_data --K 5 --n-moe-candidates 10 --moe-epochs 30
+    python cifar100_random_moe_learnable.py --device cuda:0 \\
+        --data-dir ./cifar100_data_semantic_testsplit \\
+        --K 3 --n-moe-candidates 200 --moe-epochs 30 --final-epochs 100
 """
 
 from __future__ import annotations
@@ -36,11 +42,12 @@ import cifar100_searchspace  # noqa: E402
 cifar100_searchspace.patch_toy_graph_ops()
 
 from cifar100_sgem import (  # noqa: E402
-    CIFAR100DartsSearchSpace, load_cifar100_meta,
+    CIFAR100DartsSearchSpace, load_cifar100_meta, _json_safe,
 )
 from cifar100_moe import (  # noqa: E402
     CIFAR100MoE, load_cifar100_tensors, train_moe,
 )
+from cifar100_final_train import train_final_moe  # noqa: E402
 import toy_experiment.collect_dataset as collect_dataset  # noqa: E402
 
 
@@ -48,9 +55,10 @@ def main():
     parser = argparse.ArgumentParser(
         description="Random-search baseline: sample N MoE configs, pick best"
     )
-    parser.add_argument("--data-dir", type=str, default="./cifar100_data")
+    parser.add_argument("--data-dir", type=str,
+                        default="./cifar100_data_semantic_testsplit")
     parser.add_argument("--save-results", type=str,
-                        default="./runs/results_cifar100_random_moe.json")
+                        default="./runs_testsplit/results_cifar100_random_moe.json")
     parser.add_argument("--resume-from", type=str, default=None,
                         help="JSON с предыдущей историей. Кандидаты дополняются "
                              "до --n-moe-candidates")
@@ -59,6 +67,9 @@ def main():
                         help="Целевое суммарное число MoE-конфигураций "
                              "(включая загруженные через --resume-from)")
     parser.add_argument("--moe-epochs", type=int, default=30)
+    parser.add_argument("--final-epochs", type=int, default=100,
+                        help="Эпохи финального retrain'а лучшего MoE-кандидата. "
+                             "0 = пропустить.")
     parser.add_argument("--init-channels", type=int, default=16)
     parser.add_argument("--gate-channels", type=int, default=16)
     parser.add_argument("--batch-size", type=int, default=128)
@@ -94,7 +105,7 @@ def main():
         if resume_path.exists():
             with open(resume_path) as f:
                 prev = json.load(f)
-            prev_run = prev.get("cifar100_random_moe_baseline", {})
+            prev_run = prev.get("cifar100_random_moe_learnable", {})
             history = list(prev_run.get("history", []))
             if history:
                 start_index = max(h["index"] for h in history) + 1
@@ -112,9 +123,16 @@ def main():
     save_path = Path(args.save_results)
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
+    final_moe_info: dict | None = None
+    if args.resume_from is not None and Path(args.resume_from).exists():
+        prev_run = json.load(open(args.resume_from)).get(
+            "cifar100_random_moe_learnable", {}
+        )
+        final_moe_info = prev_run.get("final_moe")
+
     def _write_results():
         result = {
-            "cifar100_random_moe_baseline": {
+            "cifar100_random_moe_learnable": {
                 "K": args.K,
                 "best_val_acc": float(best_acc),
                 "best_index": best_index,
@@ -123,6 +141,8 @@ def main():
                 "moe_epochs": args.moe_epochs,
                 "n_done": len(history),
                 "history": history,
+                "final_moe": final_moe_info,
+                "args": {k: _json_safe(v) for k, v in vars(args).items()},
             }
         }
         tmp_path = save_path.with_suffix(save_path.suffix + ".tmp")
@@ -180,6 +200,35 @@ def main():
           f"(out of {args.n_moe_candidates}): val_acc={best_acc:.4f}")
     _write_results()
     print(f"[save] results -> {save_path}")
+
+    if args.final_epochs > 0 and best_configs is not None:
+        print(f"\n=== Final retrain of best MoE (index {best_index}) "
+              f"on train ∪ val for {args.final_epochs} epochs → test ===")
+        t0 = time.time()
+        info = train_final_moe(
+            configs=best_configs,
+            hard_assignments=None,
+            data_dir=data_dir,
+            mode="learnable",
+            final=True,
+            init_channels=args.init_channels,
+            num_classes=num_classes,
+            gate_channels=args.gate_channels,
+            epochs=args.final_epochs,
+            batch_size=args.batch_size,
+            lr=args.lr, wd=args.wd,
+            seed=args.seed,
+            device=args.device,
+            verbose=False,
+        )
+        info["best_index"] = best_index
+        info["search_val_acc"] = float(best_acc)
+        final_moe_info = info
+        print(f"[final-moe] test_acc={info['test_acc']:.4f} "
+              f"(search val_acc={best_acc:.4f}, "
+              f"time={time.time()-t0:.1f}s)")
+        _write_results()
+        print(f"[save] results (with final_moe) -> {save_path}")
 
 
 if __name__ == "__main__":

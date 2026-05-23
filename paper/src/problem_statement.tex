@@ -1,0 +1,201 @@
+\section{Problem Statement}
+\label{sec:problem_statement}
+
+% \subsection{Neural Architecture Search}
+% \label{subsec:nas}
+
+% Let $\mathcal{V} = \{ 1, \ldots, N \}$ be a set of vertices, where N is a number of vertices, and $\mathcal{E} = \{ (i, j) \in \mathcal{V} \times \mathcal{V} \mid i < j \}$ a set of edges between them. A set of possible operations in architecture
+% $\mathcal{O}$ usually contains pooling, convolutions, etc.
+% For each edge there is an operation $o \in \mathcal{O}$ that transits information from one node to another.
+% Thus, the task of neural architecture search is reduced to the task of finding operations $o^{(i, j)}$ for each edge $(i, j)$.
+% Let $\boldsymbol{\alpha} \in \mathcal{A}$ be the vector of parameters indicating the operations within each edge, where $\mathcal{A}$ is a search space, i.e. a set of all possible architectures.
+
+% For a given architecture $\boldsymbol{\alpha}_k$ and weights $\boldsymbol{w}_{\boldsymbol{\alpha}_k}$, let $f(\boldsymbol{\alpha}_k, \boldsymbol{w}_{\boldsymbol{\alpha}_k})$ denote a neural network with architecture $\boldsymbol{\alpha}_k$ and parameters $w_{{\boldsymbol{\alpha}}_k}$.
+
+% Let $\mathcal{L}_{train}(f)$ and $\mathcal{L}_{val}(f)$ denote a loss of function $f$ on training and validation datasets respectively, i.e.
+% $$\mathcal{L}_{train}(f) = \sum_{(\boldsymbol{x}, y) \in \mathcal{D}_{train}} l(f(\boldsymbol{x}), y), \quad \mathcal{L}_{val}(f) = \sum_{(\boldsymbol{x}, y) \in \mathcal{D}_{val}} l(f(\boldsymbol{x}), y).$$
+% In our paper, occasionally, we will denote $\mathcal{L}_{train}(f(\boldsymbol{\alpha}_k, \boldsymbol{w}_{\boldsymbol{\alpha}_k}))$ as $\mathcal{L}_{train}(\boldsymbol{\alpha}_k, \boldsymbol{w}_{\boldsymbol{\alpha}_k})$. The same for validation.
+
+% Then we can formulate the problem statement for the neural architecture search:
+% \begin{equation} \label{eq:nas}
+% \begin{gathered}
+% 	\min_{\boldsymbol{\alpha}\in \mathcal{A}} \mathcal{L}_{val}(\boldsymbol{\alpha}, \boldsymbol{w_\alpha^*}), \\
+% s.t. \quad \boldsymbol{w_\alpha^*} = \arg \min_{\boldsymbol{w}\in \mathcal{W}_{\boldsymbol{\alpha}}} \mathcal{L}_{train}(\boldsymbol{w}, \boldsymbol{\alpha}),
+% \end{gathered}
+% \end{equation}
+% where $\mathcal{W}_{\boldsymbol{\alpha}}$ is a set of all possible parameters for an archtiecture $\boldsymbol{\alpha}$.
+
+% \subsection{Muxture-of-Experts Search}
+% \label{subsec:moes}
+
+% Suppose dataset splits into K clusters, i.e. 
+% $X = X_1 \cup \ldots \cup X_K$. The problem of searching for optimal architecture of MOE lies in a problem of searching an optimal architecture for each distinct cluster. In order to formulate in more strictly, we imply following notation: let
+% $\boldsymbol{\alpha}$ be a concatenation of all vectors $\boldsymbol{\alpha}_1, \ldots, \boldsymbol{\alpha}_K$. We denote MOE with architecture $\boldsymbol{\alpha}$ and parameters $\boldsymbol{w}_{\boldsymbol{\alpha}}$ as $g(\boldsymbol{\alpha}, \boldsymbol{w}_{\boldsymbol{\alpha}})$. The function works as follows:
+% $$g(\boldsymbol{\alpha}, \boldsymbol{w}_{\boldsymbol{\alpha}})(\boldsymbol{x}) = \sum_{k=1}^K r_k(\boldsymbol{x}, \boldsymbol{w}_r) f(\boldsymbol{\alpha}_k, \boldsymbol{w}_{\boldsymbol{\alpha}_k}^*)(\boldsymbol{x}),$$
+% where $r_k(\boldsymbol{x}, \boldsymbol{w}_r)$ are route gate values.
+
+% Given the notation, the problem of architecture search for MOE can be formulated in a similar way as \ref{eq:nas}:
+
+% \begin{equation} \label{eq:moes}
+% \begin{gathered}
+% 	\min_{\boldsymbol{\alpha} \in \mathcal{A}^K} \mathcal{L}_{val}(\boldsymbol{\alpha}, \boldsymbol{w}_{\boldsymbol{\alpha}}^*), \\
+% s.t. \quad \boldsymbol{w}_{\boldsymbol{\alpha}}^* = \arg \min_{\boldsymbol{w}\in \mathcal{W}_{\boldsymbol{\alpha}}} \mathcal{L}_{train}(\boldsymbol{w}, \boldsymbol{\alpha}),
+% \end{gathered}
+% \end{equation}
+
+% In our research we reformulate \ref{eq:moes} as:
+% \begin{equation} \label{eq:moes}
+% \begin{gathered}
+% 	\min_{\boldsymbol{\alpha} \in \mathcal{A}^K} \mathcal{L}_{val}^{X_1}(\boldsymbol{\alpha}_1, \boldsymbol{w}_{\boldsymbol{\alpha}_1}^*) + \ldots + \mathcal{L}_{val}^{X_K}(\boldsymbol{\alpha}_K, \boldsymbol{w}_{\boldsymbol{\alpha}_K}^*) \\
+% s.t. \quad \forall k\in \overline{1, K} \quad \boldsymbol{w}_{\boldsymbol{\alpha}_k}^* = \arg \min_{\boldsymbol{w}\in \mathcal{W}_{\boldsymbol{\alpha}_k}} \mathcal{L}_{train}(\boldsymbol{w}, \boldsymbol{\alpha}_k),
+% \end{gathered}
+% \end{equation}
+% i.e. we devide the problem into K problems of searching an optimal architecture for each cluster.
+
+
+% \subsection{Surrogate Function Training}
+% \label{subsec:surr}
+
+% We use a surrogate function $u : \mathcal{A} \to \mathbb{R}^K$ to calculate accuracy of architectures on different clusters.
+
+
+
+
+
+
+
+
+
+
+
+
+\subsection{Neural Architecture Search}
+\label{subsec:nas}
+
+\begin{definition}
+Let $\mathcal{V} = \{1, 2, \ldots, N\}$ be a set of $N$ vertices representing nodes in a directed acyclic graph (DAG). We define a set of edges as
+\begin{equation}
+\mathcal{E} = \{(i, j) \in \mathcal{V} \times \mathcal{V} \mid i < j\},
+\end{equation}
+representing the possible connections between vertices, where the ordering constraint $i < j$ enforces a topological structure.
+\end{definition}
+
+\begin{definition}
+The set of admissible operations $\mathcal{O}$ comprises a collection of differentiable or discrete operations that can be applied to edges in the network architecture. Common operations include convolutions of varying kernel sizes (e.g., $1 \times 1$, $3 \times 3$), pooling operations (max pooling, average pooling), and skip connections.
+\end{definition}
+
+For each edge $(i, j) \in \mathcal{E}$, an operation $o^{(i,j)} \in \mathcal{O}$ is assigned to transmit information from vertex $i$ to vertex $j$. The task of neural architecture search is thus reduced to determining the optimal assignment of operations to edges.
+
+\begin{definition}
+Let $\boldsymbol{\alpha} \in \mathcal{A}$ be an architecture vector encoding the operations assigned to each edge, where $\mathcal{A}$ is the search space comprising all possible architecture configurations. Each component $\alpha_{i,j}$ specifies the operation on edge $(i, j)$.
+\end{definition}
+
+For a given architecture $\boldsymbol{\alpha}_k \in \mathcal{A}$ and its corresponding parameters $\boldsymbol{w}_{\boldsymbol{\alpha}_k} \in \mathcal{W}_{\boldsymbol{\alpha}_k}$, we denote the neural network as $f(\boldsymbol{\alpha}_k, \boldsymbol{w}_{\boldsymbol{\alpha}_k}): \mathcal{X} \to \mathcal{Y}$, where $\mathcal{X}$ and $\mathcal{Y}$ are the input and output spaces respectively.
+
+\begin{definition}
+The empirical loss functions on training and validation datasets are defined as follows:
+\begin{equation}
+\mathcal{L}_{\text{train}}(f) = \sum_{(\boldsymbol{x}, y) \in \mathcal{D}_{\text{train}}} \ell(f(\boldsymbol{x}), y), \quad \mathcal{L}_{\text{val}}(f) = \sum_{(\boldsymbol{x}, y) \in \mathcal{D}_{\text{val}}} \ell(f(\boldsymbol{x}), y),
+\end{equation}
+where $\ell: \mathcal{Y} \times \mathcal{Y} \to \mathbb{R}_{\geq 0}$ is a task-specific loss function, and $\mathcal{D}_{\text{train}}$ and $\mathcal{D}_{\text{val}}$ denote the training and validation datasets respectively. We use the shorthand notation $\mathcal{L}_{\text{train}}(\boldsymbol{\alpha}_k, \boldsymbol{w}_{\boldsymbol{\alpha}_k})$ and $\mathcal{L}_{\text{val}}(\boldsymbol{\alpha}_k, \boldsymbol{w}_{\boldsymbol{\alpha}_k})$ interchangeably with $\mathcal{L}_{\text{train}}(f(\boldsymbol{\alpha}_k, \boldsymbol{w}_{\boldsymbol{\alpha}_k}))$ and $\mathcal{L}_{\text{val}}(f(\boldsymbol{\alpha}_k, \boldsymbol{w}_{\boldsymbol{\alpha}_k}))$ respectively.
+\end{definition}
+
+The neural architecture search problem is formulated as a bilevel optimization problem:
+
+\begin{equation}
+\label{eq:nas}
+\begin{gathered}
+	\min_{\boldsymbol{\alpha} \in \mathcal{A}} \mathcal{L}_{\text{val}}(\boldsymbol{\alpha}, \boldsymbol{w}_{\boldsymbol{\alpha}}^*), \\
+\text{s.t.} \quad \boldsymbol{w}_{\boldsymbol{\alpha}}^* = \arg \min_{\boldsymbol{w} \in \mathcal{W}_{\boldsymbol{\alpha}}} \mathcal{L}_{\text{train}}(\boldsymbol{\alpha}, \boldsymbol{w}),
+\end{gathered}
+\end{equation}
+where $\mathcal{W}_{\boldsymbol{\alpha}}$ denotes the space of all learnable parameters for architecture $\boldsymbol{\alpha}$.
+
+
+\textit{Interpretation:} The outer minimization seeks an architecture $\boldsymbol{\alpha}$ that minimizes validation loss. The constraint ensures that the network weights $\boldsymbol{w}_{\boldsymbol{\alpha}}^*$ are optimally trained on the training dataset for the selected architecture. This formulation reflects the fundamental trade-off between model expressiveness (architecture choice) and generalization capability (validation performance).
+
+\subsection{Mixture-of-Experts Architecture}
+\label{subsec:moe_arch}
+
+\begin{definition}
+A Mixture-of-Experts (MoE) model is a composite model comprising $K$ expert networks, each specialized for a distinct subset of the input space. Given a dataset partitioned into $K$ clusters, $\mathcal{D} = \mathcal{D}_1 \cup \mathcal{D}_2 \cup \cdots \cup \mathcal{D}_K$ (forming a partition), where each cluster $\mathcal{D}_k$ corresponds to a specialized domain or data modality.
+\end{definition}
+
+Let $\boldsymbol{\alpha} = [\boldsymbol{\alpha}_1^T, \boldsymbol{\alpha}_2^T, \ldots, \boldsymbol{\alpha}_K^T]^T$ be the concatenation of architecture vectors for all $K$ experts. We denote a Mixture-of-Experts model with architecture $\boldsymbol{\alpha}$ and parameters $\boldsymbol{w}_{\boldsymbol{\alpha}}$ as $g(\boldsymbol{\alpha}, \boldsymbol{w}_{\boldsymbol{\alpha}})$.
+
+The MoE prediction is computed as a weighted combination of expert outputs:
+\begin{equation}
+g(\boldsymbol{\alpha}, \boldsymbol{w}_{\boldsymbol{\alpha}}, \boldsymbol{w}_r)(\boldsymbol{x}) = \sum_{k=1}^{K} r_k(\boldsymbol{x}, \boldsymbol{w}_r) \cdot f(\boldsymbol{\alpha}_k, \boldsymbol{w}_{\boldsymbol{\alpha}_k}^*)(\boldsymbol{x}),
+\end{equation}
+where $f(\boldsymbol{\alpha}_k, \boldsymbol{w}_{\boldsymbol{\alpha}_k}^*)$ denotes the $k$-th expert network, and $r_k(\boldsymbol{x}, \boldsymbol{w}_r) \geq 0$ are routing gate values learned by a gating network with parameters $\boldsymbol{w}_r$. The routing gates typically satisfy $\sum_{k=1}^K r_k(\boldsymbol{x}, \boldsymbol{w}_r) = 1$.
+
+\subsection{Neural Architecture Search for Mixture-of-Experts}
+\label{subsec:moes}
+
+The problem of discovering optimal architectures for each expert in a Mixture-of-Experts model can be formulated as an extension of Problem \ref{eq:nas} to the multi-expert setting.
+
+\begin{equation}
+\label{eq:moes_orig}
+\begin{gathered}
+	\min_{\boldsymbol{\alpha} \in \mathcal{A}^K} \mathcal{L}_{\text{val}}(\boldsymbol{\alpha}, \boldsymbol{w}_{\boldsymbol{\alpha}}^*, \boldsymbol{w}_r), \\
+\text{s.t.} \quad (\boldsymbol{w}_{\boldsymbol{\alpha}}^*, \boldsymbol{w}_{r}^*) = \arg \min_{\boldsymbol{w}, \boldsymbol{w}_r \in \mathcal{W}_{\boldsymbol{\alpha}} \times \mathcal{W}_r} \mathcal{L}_{\text{train}}(\boldsymbol{\alpha}, \boldsymbol{w}, \boldsymbol{w}_r)
+\end{gathered}
+\end{equation}
+where $\mathcal{A}^K$ denotes the combined search space for $K$ expert architectures.
+
+\begin{remark}
+Problem \ref{eq:moes_orig} extends the search space from $\mathcal{A}$ to $\mathcal{A}^K$, exponentially increasing computational complexity. To mitigate this complexity, we propose the following decomposition.
+\end{remark}
+
+We reformulate Problem \ref{eq:moes_orig} by decomposing the global optimization objective into cluster-wise sub-problems:
+
+\begin{equation}
+\label{eq:moes_decomposed}
+\begin{gathered}
+	\min_{\boldsymbol{\alpha} \in \mathcal{A}^K} \sum_{k=1}^{K} \mathcal{L}_{\text{val}}^{\mathcal{D}_k}(\boldsymbol{\alpha}_k, \boldsymbol{w}_{\boldsymbol{\alpha}_k}^*), \\
+\text{s.t.} \quad \forall k \in \{1, 2, \ldots, K\}, \quad \boldsymbol{w}_{\boldsymbol{\alpha}_k}^* = \arg \min_{\boldsymbol{w} \in \mathcal{W}_{\boldsymbol{\alpha}_k}} \mathcal{L}_{\text{train}}^{\mathcal{D}_k}(\boldsymbol{w}, \boldsymbol{\alpha}_k),
+\end{gathered}
+\end{equation}
+where $\mathcal{L}_{\text{val}}^{\mathcal{D}_k}$ and $\mathcal{L}_{\text{train}}^{\mathcal{D}_k}$ denote validation and training losses computed on cluster $\mathcal{D}_k$ respectively.
+
+\textit{Motivation:} This decomposition assumes that the optimal expert for cluster $\mathcal{D}_k$ can be found independently by optimizing the architecture and weights on the $k$-th cluster's data. This assumption is justified when clusters represent sufficiently distinct data distributions and the experts operate independently (no parameter sharing across experts beyond the gating network).
+
+\subsection{Cluster-aware MoE Objective}
+\label{subsec:objective}
+
+The decomposed Problem~\ref{eq:moes_decomposed} still requires
+training one architecture per cluster to evaluate every candidate.
+To turn architecture search into a tractable optimisation problem we
+introduce a function
+$u: \mathcal{A} \times [0,1]^M \to \mathbb{R}_{\geq 0}$ that scores
+the validation accuracy of an architecture~$\boldsymbol{\alpha}$
+trained on a subset of clusters, encoded by a vector
+$\mathbf{R}\in[0,1]^M$. A concrete construction of $u$ as a learned
+surrogate is given in Section~\ref{subsec:surr}.
+
+Let $r_{mk}\in[0,1]$ be the soft assignment probability of cluster
+$m$ to expert $k$, with $\sum_{k=1}^{K} r_{mk} = 1$, and collect them
+in a routing matrix $\mathbf{r}\in[0,1]^{M\times K}$. Denote by
+$\mathbf{R}_k = \mathbf{r}_{:,k}\in[0,1]^M$ the column corresponding
+to expert~$k$. The cluster-aware MoE optimisation problem is
+\begin{equation}
+\label{eq:moe_objective}
+\mathcal{J}(\boldsymbol{\alpha}_{1:K}, \mathbf{r}) \;=\;
+\sum_{m=1}^{M} \log \sum_{k=1}^{K} r_{mk}\, u(\boldsymbol{\alpha}_k, \mathbf{R}_k)
+\;\to\; \max_{\boldsymbol{\alpha}_{1:K},\, \mathbf{r}}.
+\end{equation}
+Intuitively, $r_{mk}$ specifies how strongly cluster $m$ is routed
+to expert $k$, while $u$ scores how well each expert handles the
+cluster subset that it is responsible for. Problem
+\eqref{eq:moe_objective} is the empirical surrogate-based
+counterpart of the marginal MoE log-likelihood
+$\sum_{n=1}^{N}\log\sum_{k=1}^{K} r_{nk}\,
+p(y_n, n\in C_k\mid x_n, \boldsymbol{\alpha}_k, \boldsymbol{\theta}_k)$,
+where the per-cluster likelihood factor has been replaced by the
+quality estimate $u(\boldsymbol{\alpha}_k, \mathbf{R}_k)$. The
+algorithm of Section~\ref{subsec:sgem} solves
+\eqref{eq:moe_objective} via Generalised EM with an adaptively
+refined surrogate.
+
+
+

@@ -6,11 +6,11 @@
     3. Выбирается лучшая по val accuracy.
 
 Это нижний бейзлайн без MoE и без архитектурной специализации — для сравнения
-с random_moe_baseline (где K архитектур объединяются через learnable gating).
+с random_moe_learnable (где K архитектур объединяются через learnable gating).
 
 Запуск:
     python cifar100_random_single_arch_baseline.py --device cuda:0 \\
-        --data-dir ./cifar100_data --n-arch-candidates 50 --epochs 30
+        --data-dir ./cifar100_data_semantic_testsplit --n-arch-candidates 50 --epochs 30
 """
 
 from __future__ import annotations
@@ -44,9 +44,10 @@ def main():
     parser = argparse.ArgumentParser(
         description="Random-search baseline: sample N single architectures, pick best"
     )
-    parser.add_argument("--data-dir", type=str, default="./cifar100_data")
+    parser.add_argument("--data-dir", type=str,
+                        default="./cifar100_data_semantic_testsplit")
     parser.add_argument("--save-results", type=str,
-                        default="./runs/results_cifar100_random_single_arch.json")
+                        default="./runs_testsplit/results_cifar100_random_single_arch.json")
     parser.add_argument("--resume-from", type=str, default=None,
                         help="JSON с предыдущей историей. Кандидаты дополняются "
                              "до --n-arch-candidates")

@@ -2,7 +2,7 @@
 
 Используется в бейзлайнах:
     - cifar100_random_search_single_arch.py — все K экспертов имеют ОДНУ И ТУ ЖЕ архитектуру
-    - cifar100_random_moe_baseline.py — каждый эксперт случайный
+    - cifar100_random_moe_learnable.py — каждый эксперт случайный
 
 Структура аналогична mnist/train_random_moe.py, но 3-канальный вход (RGB) и
 gating-сеть глубже под 32×32.
@@ -88,23 +88,43 @@ class CIFAR100MoE(nn.Module):
 # ==========================================================================
 
 
+def _normalize_split(X, y, idx):
+    mean = torch.tensor(CIFAR100_MEAN).view(1, 3, 1, 1)
+    std = torch.tensor(CIFAR100_STD).view(1, 3, 1, 1)
+    xb = torch.from_numpy(X[idx]).float().div_(255.0).sub_(mean).div_(std)
+    yb = torch.from_numpy(y[idx])
+    return xb, yb
+
+
 def load_cifar100_tensors(data_dir: Path):
+    """Вернуть (X_train, y_train, X_val, y_val) — используется на этапе поиска."""
     X = np.load(data_dir / "data_X.npy")               # uint8 [N, 3, 32, 32]
     y = np.load(data_dir / "data_y.npy").astype(np.int64)
     train_idx = np.load(data_dir / "train_indices.npy")
     val_idx = np.load(data_dir / "val_indices.npy")
-
-    mean = torch.tensor(CIFAR100_MEAN).view(1, 3, 1, 1)
-    std = torch.tensor(CIFAR100_STD).view(1, 3, 1, 1)
-
-    def to_tensor(idx):
-        xb = torch.from_numpy(X[idx]).float().div_(255.0).sub_(mean).div_(std)
-        yb = torch.from_numpy(y[idx])
-        return xb, yb
-
-    X_tr, y_tr = to_tensor(train_idx)
-    X_v, y_v = to_tensor(val_idx)
+    X_tr, y_tr = _normalize_split(X, y, train_idx)
+    X_v, y_v = _normalize_split(X, y, val_idx)
     return X_tr, y_tr, X_v, y_v
+
+
+def load_cifar100_test_tensors(data_dir: Path):
+    """Вернуть (X_test, y_test) — отложенная выборка для финальной оценки."""
+    data_dir = Path(data_dir)
+    X = np.load(data_dir / "data_X.npy")
+    y = np.load(data_dir / "data_y.npy").astype(np.int64)
+    test_idx = np.load(data_dir / "test_indices.npy")
+    return _normalize_split(X, y, test_idx)
+
+
+def load_cifar100_tensors_trainval(data_dir: Path):
+    """Вернуть (X_trainval, y_trainval) = train ∪ val — для финального обучения."""
+    data_dir = Path(data_dir)
+    X = np.load(data_dir / "data_X.npy")
+    y = np.load(data_dir / "data_y.npy").astype(np.int64)
+    train_idx = np.load(data_dir / "train_indices.npy")
+    val_idx = np.load(data_dir / "val_indices.npy")
+    trainval_idx = np.concatenate([train_idx, val_idx])
+    return _normalize_split(X, y, trainval_idx)
 
 
 # ==========================================================================
@@ -139,8 +159,16 @@ def train_moe(
     wd: float = 3e-4,
     device: str = "cuda",
     verbose: bool = True,
+    eval_each_epoch: bool = True,
 ) -> float:
-    """Обучить MoE и вернуть лучшую val-accuracy."""
+    """Обучить MoE.
+
+    eval_each_epoch=True (поиск): оценивать (X_v, y_v) каждую эпоху, вернуть
+        лучшую accuracy за все эпохи.
+    eval_each_epoch=False (финал): не подглядывать в (X_v, y_v) по ходу
+        обучения — оценить один раз после последней эпохи и вернуть это
+        число. Использовать, когда (X_v, y_v) — отложенный test.
+    """
     moe.to(device)
     optimizer = torch.optim.SGD(
         moe.parameters(), lr=lr, momentum=0.9, weight_decay=wd, nesterov=True,
@@ -174,12 +202,23 @@ def train_moe(
             n += len(yb)
         scheduler.step()
 
-        val_acc, val_gate = evaluate_moe(moe, X_v, y_v, batch_size, device)
-        if val_acc > best_val:
-            best_val = val_acc
-        if verbose:
+        if eval_each_epoch:
+            val_acc, val_gate = evaluate_moe(moe, X_v, y_v, batch_size, device)
+            if val_acc > best_val:
+                best_val = val_acc
+            if verbose:
+                print(f"  [epoch {epoch:02d}/{epochs}] "
+                      f"train_loss={running/n:.4f} val_acc={val_acc:.4f} "
+                      f"gate={np.round(val_gate, 2).tolist()} "
+                      f"time={time.time()-t0:.1f}s")
+        elif verbose:
             print(f"  [epoch {epoch:02d}/{epochs}] "
-                  f"train_loss={running/n:.4f} val_acc={val_acc:.4f} "
-                  f"gate={np.round(val_gate, 2).tolist()} "
-                  f"time={time.time()-t0:.1f}s")
+                  f"train_loss={running/n:.4f} time={time.time()-t0:.1f}s")
+
+    if not eval_each_epoch:
+        final_acc, final_gate = evaluate_moe(moe, X_v, y_v, batch_size, device)
+        if verbose:
+            print(f"  [final eval] acc={final_acc:.4f} "
+                  f"gate={np.round(final_gate, 2).tolist()}")
+        return final_acc
     return best_val

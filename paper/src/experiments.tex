@@ -1,0 +1,186 @@
+\section{Experiments}
+\label{sec:experiments}
+
+We evaluate the proposed framework on two complementary problems:
+(i) a controlled 2D toy task that allows us to verify whether the
+recovered routing matches the ground-truth cluster structure, and
+(ii) a heterogeneous CIFAR-100 / SVHN image mixture, where the data
+source defines an oracle partition and we compare against several MoE
+and NAS baselines.
+
+\subsection{Toy Experiment}
+\label{subsec:toy}
+
+\paragraph{Setup.}
+We sample $2000$ points in $\mathbb{R}^2$ from a four-class problem
+consisting of one ``linear'' cloud (two classes separated by a
+diagonal) and one ``ring'' cloud (two classes corresponding to an
+inner and an outer ring). The data is split $80/20$ into
+training/validation and clustered into $M = 20$ KMeans clusters,
+yielding the partition described in our data preparation pipeline.
+We use $K = 2$ experts so that the ideal solution is unambiguous: one
+expert should specialise to the linear cloud and the other to the
+ring cloud. The search space is the cell-based DARTS-style space of
+\cite{liu2018darts}, restricted to small operations suitable for 2D
+inputs.
+
+\paragraph{Results.}
+With the parameters reported in our experimental log, SAGEM
+(Algorithm~\ref{alg:sgem}) recovers the \emph{ideal} cluster split
+$(10, 10)$ between the two experts in $20$ EM iterations, matching
+the hand-defined oracle assignment that splits clusters according to
+the centroid coordinate $x_0 = -2$ (Figure~\ref{fig:toy}). This sanity check confirms that
+the surrogate-guided objective in~\eqref{eq:moe_objective} is well
+posed and that the proposed optimiser solves it when the surrogate
+is sufficiently accurate, in agreement with the convergence
+guarantee of Theorem~\ref{thm:sgem}.
+
+\begin{figure}[h]
+    \centering
+    \begin{subfigure}[b]{0.32\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{toy_dataset}
+        \caption{}
+        \label{fig:toy_dataset}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.32\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{toy_clusters}
+        \caption{}
+        \label{fig:toy_clusters}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.32\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{toy_sgem_split}
+        \caption{}
+        \label{fig:toy_sgem}
+    \end{subfigure}
+    \caption{Toy experiment. (a) The four-class dataset: a linear cloud
+    (classes 0--1) and a ring cloud (classes 2--3). (b) The $M = 20$
+    KMeans clusters (crosses mark the centroids). (c) The expert
+    assignment recovered by SAGEM with $K = 2$: it splits the clusters
+    exactly along the linear/ring boundary, matching the oracle
+    partition up to a permutation of expert labels.}
+    \label{fig:toy}
+\end{figure}
+
+\subsection{CIFAR-100 / SVHN mixture}
+\label{subsec:cifar}
+
+\paragraph{Setup.}
+To test whether the cluster-aware objective recovers a meaningful
+data partition on realistic data, we build a heterogeneous benchmark
+by mixing CIFAR-100 and SVHN in equal proportions ($42\,000$ images
+total). SVHN labels are shifted by $100$, so the combined problem has
+$110$ classes. The two sources form a maximally separated domain
+structure, which gives a well-defined oracle: with $K = 2$ experts the
+ideal routing assigns each cluster to the expert specialised on its
+source. We partition the data into $M = 30$ \emph{semantic} clusters
+obtained from a pretrained feature extractor, using a three-way
+train/validation/test split ($0.7/0.15/0.15$). KMeans is fit on the
+training embeddings only; validation and test points are assigned to
+the nearest centroid. The resulting oracle partition is
+$19$ CIFAR-majority and $11$ SVHN-majority clusters, with a mean
+source purity of $0.978$.
+
+All MoE configurations use $K = 2$ experts with
+\texttt{init\_channels = 16}. The base network is a small DARTS-style
+architecture \texttt{CIFAR100Net} (stem, two normal cells, one fixed
+reduction cell, global average pooling, fully connected head). The MoE
+wrapper instantiates $K$ such networks combined through a fixed hard
+\emph{cluster gate}: each cluster is routed to a single expert, so the
+gate directly reflects the discovered data partition. Architecture
+search uses the train/validation split; the final model is retrained
+for $100$ epochs on $\text{train} \cup \text{validation}$ and evaluated
+\emph{once} on the held-out test set. We report test accuracy averaged
+over five seeds. Training is performed inside a Docker container with
+PyTorch~2.5.1 on a single RTX~3080~Ti GPU.
+
+\paragraph{Baselines.}
+We compare against the following methods, all evaluated with the same
+cluster gate:
+\begin{itemize}
+    \item \textbf{Random-MoE}: $200$ random architecture pairs are
+    searched at $30$ epochs each on a random cluster split, then the
+    best is retrained.
+    \item \textbf{DARTS$\times K$}: $K$ experts that share the same
+    DARTS-discovered architecture on a random cluster split.
+    \item \textbf{SAGEM}: our method with the Phase~C uniform-mixture
+    coefficient $p_C = 0.5$ and load-balancing weight
+    $\lambda_{\text{LB}} = 50$.
+\end{itemize}
+
+\paragraph{Main results.}
+Table~\ref{tab:cifar_main} reports the test accuracy with cluster
+gating. The differences between the methods are small and lie
+within one standard deviation of each other: SAGEM
+($0.5935 \pm 0.003$) is statistically indistinguishable from
+DARTS$\times K$ ($0.5913 \pm 0.009$), and both improve only marginally
+over the random-MoE baseline ($0.5551 \pm 0.031$, with a large
+seed-to-seed variance). Hard cluster gating partitions the data so
+that each expert sees fewer examples, which largely offsets the benefit
+of specialisation, leaving the learned routing of SAGEM no better than
+sharing a single architecture across experts on a random split.
+
+\begin{table}[h]
+\centering
+\caption{Test accuracy on the CIFAR-100 / SVHN mixture with cluster
+gating ($M=30$, $K=2$, semantic clustering, mean $\pm$ std over five
+seeds).}
+\label{tab:cifar_main}
+\begin{tabular}{lc}
+\toprule
+Method & test acc.\ (cluster gate) \\
+\midrule
+Random-MoE & $0.5551 \pm 0.031$ \\
+DARTS$\times K$ (same arch) & $0.5913 \pm 0.009$ \\
+SAGEM, $\lambda_{\text{LB}}{=}50$, $p_C{=}0.5$ & $\mathbf{0.5935 \pm 0.003}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[p]
+    \centering
+    \includegraphics[height=0.92\textheight]{svhn_cluster_reps}
+    \caption{Per-cluster representatives of the CIFAR-100 / SVHN
+    mixture under the SAGEM routing ($K=2$, seed $322$; first $15$ of
+    the $M = 30$ semantic clusters shown). Each row is one cluster: the
+    leftmost column is the cluster medoid and the rest are the eight
+    images nearest to the cluster mean. The medoid border (leftmost
+    column) is coloured by the expert assigned by SAGEM (E0 red,
+    E1 green).}
+    \label{fig:svhn_reps}
+\end{figure}
+
+\paragraph{Does SAGEM recover the data source?}
+Because the oracle partition by data source is sharp (mean purity
+$0.978$), we can directly check whether the learned routing aligns
+with it (Figure~\ref{fig:svhn_reps}). Across five seeds, the SAGEM
+hard assignment agrees with the oracle source split on only
+$\approx 60\%$ of clusters (best matching of the two label
+permutations), barely above the $\approx 54\%$ baseline of a balanced
+random split. The load-balancing penalty is the main culprit: the
+oracle split is imbalanced ($19/11$) whereas the penalty pulls the
+routing towards $15/15$, washing out the source signal. Hence the
+hypothesis that the cluster-aware objective discovers the underlying
+data domains is \emph{not} supported on this benchmark.
+
+\paragraph{Discussion.}
+With cluster gating, all MoE variants cluster tightly around
+$0.59$ test accuracy, and the source-recovery analysis shows
+that the discovered partition is essentially uncorrelated with the
+true data structure. We attribute this to a self-reinforcing bias in
+the surrogate dataset rather than to the EM optimiser itself: the
+active-learning loop over-samples cluster masks favourable to a
+dominant expert, so the routing is driven by the surrogate's bias and
+is held balanced only by the load-balancing penalty. Removing this
+bias --- for instance by symmetrising the data collection across
+experts or enforcing permutation invariance of the surrogate --- is
+the most promising direction for making the cluster-aware routing
+informative. As Figure~\ref{fig:svhn_reps} illustrates at the level of
+individual images, many SVHN-dominated clusters (digit crops) and
+CIFAR-dominated clusters (natural images) are routed to different
+experts, but the assignment is far from a clean source split,
+consistent with the $\approx 60\%$ agreement reported above.

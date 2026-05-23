@@ -3,7 +3,7 @@
 Поддерживается два варианта gating:
 
     1. learnable — обучаемый softmax-gating (CIFAR100MoE из cifar100_moe.py).
-       Эквивалентно бейзлайну cifar100_random_moe_baseline.py — даёт прямое
+       Эквивалентно бейзлайну cifar100_random_moe_learnable.py — даёт прямое
        сравнение «архитектуры от SGEM vs случайные» при одинаковом gating.
 
     2. cluster   — жёсткий gating по hard_assignments из r_matrix:
@@ -21,9 +21,9 @@
 
 CLI (обучить MoE по уже сохранённому JSON-у SGEM):
     python cifar100_final_train.py \\
-        --results-json ./runs/results_cifar100_sgem_K3_lb000_mix050.json \\
-        --data-dir ./cifar100_data \\
-        --mode both --epochs 30 --device cuda:0
+        --results-json ./runs_testsplit/results_cifar100_sgem.json \\
+        --data-dir ./cifar100_data_semantic_testsplit \\
+        --mode both --final --epochs 100 --device cuda:0
 """
 
 from __future__ import annotations
@@ -52,7 +52,8 @@ cifar100_searchspace.patch_toy_graph_ops()
 
 from cifar100_sgem import CIFAR100Net, CIFAR100_MEAN, CIFAR100_STD  # noqa: E402
 from cifar100_moe import (  # noqa: E402
-    CIFAR100MoE, load_cifar100_tensors, train_moe,
+    CIFAR100MoE, load_cifar100_tensors, load_cifar100_tensors_trainval,
+    load_cifar100_test_tensors, train_moe,
 )
 
 
@@ -111,8 +112,14 @@ class ClusterGatedMoE(nn.Module):
 # ==========================================================================
 
 
+def _norm_imgs(X, idx):
+    mean = torch.tensor(CIFAR100_MEAN).view(1, 3, 1, 1)
+    std = torch.tensor(CIFAR100_STD).view(1, 3, 1, 1)
+    return torch.from_numpy(X[idx]).float().div_(255.0).sub_(mean).div_(std)
+
+
 def load_cifar100_tensors_with_clusters(data_dir: Path):
-    """То же, что load_cifar100_tensors, но возвращает и cluster_ids."""
+    """То же, что load_cifar100_tensors, но возвращает и cluster_ids (train/val)."""
     data_dir = Path(data_dir)
     X = np.load(data_dir / "data_X.npy")               # uint8 [N, 3, 32, 32]
     y = np.load(data_dir / "data_y.npy").astype(np.int64)
@@ -121,19 +128,40 @@ def load_cifar100_tensors_with_clusters(data_dir: Path):
     train_cl = np.load(data_dir / "train_cluster_ids.npy").astype(np.int64)
     val_cl = np.load(data_dir / "val_cluster_ids.npy").astype(np.int64)
 
-    mean = torch.tensor(CIFAR100_MEAN).view(1, 3, 1, 1)
-    std = torch.tensor(CIFAR100_STD).view(1, 3, 1, 1)
-
-    def to_tensor(idx):
-        xb = torch.from_numpy(X[idx]).float().div_(255.0).sub_(mean).div_(std)
-        yb = torch.from_numpy(y[idx])
-        return xb, yb
-
-    X_tr, y_tr = to_tensor(train_idx)
-    X_v, y_v = to_tensor(val_idx)
+    X_tr, y_tr = _norm_imgs(X, train_idx), torch.from_numpy(y[train_idx])
+    X_v, y_v = _norm_imgs(X, val_idx), torch.from_numpy(y[val_idx])
     c_tr = torch.from_numpy(train_cl)
     c_v = torch.from_numpy(val_cl)
     return X_tr, y_tr, c_tr, X_v, y_v, c_v
+
+
+def load_cifar100_tensors_with_clusters_trainval_test(data_dir: Path):
+    """Для финального обучения cluster-gated MoE.
+
+    Возвращает (X_trainval, y_trainval, c_trainval, X_test, y_test, c_test):
+        * train ∪ val — на чём обучаем финальную модель;
+        * test — отложенная выборка для единственной финальной оценки.
+    """
+    data_dir = Path(data_dir)
+    X = np.load(data_dir / "data_X.npy")
+    y = np.load(data_dir / "data_y.npy").astype(np.int64)
+    train_idx = np.load(data_dir / "train_indices.npy")
+    val_idx = np.load(data_dir / "val_indices.npy")
+    test_idx = np.load(data_dir / "test_indices.npy")
+    train_cl = np.load(data_dir / "train_cluster_ids.npy").astype(np.int64)
+    val_cl = np.load(data_dir / "val_cluster_ids.npy").astype(np.int64)
+    test_cl = np.load(data_dir / "test_cluster_ids.npy").astype(np.int64)
+
+    trainval_idx = np.concatenate([train_idx, val_idx])
+    trainval_cl = np.concatenate([train_cl, val_cl])
+
+    X_trv = _norm_imgs(X, trainval_idx)
+    y_trv = torch.from_numpy(y[trainval_idx])
+    c_trv = torch.from_numpy(trainval_cl)
+    X_te = _norm_imgs(X, test_idx)
+    y_te = torch.from_numpy(y[test_idx])
+    c_te = torch.from_numpy(test_cl)
+    return X_trv, y_trv, c_trv, X_te, y_te, c_te
 
 
 # ==========================================================================
@@ -173,8 +201,14 @@ def train_cluster_gated_moe(
     wd: float = 3e-4,
     device: str = "cuda",
     verbose: bool = True,
+    eval_each_epoch: bool = True,
 ) -> float:
-    """Обучить cluster-gated MoE; вернуть лучший val-accuracy."""
+    """Обучить cluster-gated MoE.
+
+    eval_each_epoch=True: оценивать (X_v, y_v, c_v) каждую эпоху, вернуть
+        лучшую accuracy. eval_each_epoch=False: оценить один раз после
+        последней эпохи (для отложенного test — без подглядывания).
+    """
     moe.to(device)
     optimizer = torch.optim.SGD(
         moe.parameters(), lr=lr, momentum=0.9, weight_decay=wd, nesterov=True,
@@ -208,16 +242,29 @@ def train_cluster_gated_moe(
             n += len(yb)
         scheduler.step()
 
-        val_acc, expert_share = _evaluate_cluster_moe(
+        if eval_each_epoch:
+            val_acc, expert_share = _evaluate_cluster_moe(
+                moe, X_v, y_v, c_v, batch_size, device,
+            )
+            if val_acc > best_val:
+                best_val = val_acc
+            if verbose:
+                print(f"  [epoch {epoch:02d}/{epochs}] "
+                      f"train_loss={running/n:.4f} val_acc={val_acc:.4f} "
+                      f"expert_share={np.round(expert_share, 2).tolist()} "
+                      f"time={time.time()-t0:.1f}s")
+        elif verbose:
+            print(f"  [epoch {epoch:02d}/{epochs}] "
+                  f"train_loss={running/n:.4f} time={time.time()-t0:.1f}s")
+
+    if not eval_each_epoch:
+        final_acc, expert_share = _evaluate_cluster_moe(
             moe, X_v, y_v, c_v, batch_size, device,
         )
-        if val_acc > best_val:
-            best_val = val_acc
         if verbose:
-            print(f"  [epoch {epoch:02d}/{epochs}] "
-                  f"train_loss={running/n:.4f} val_acc={val_acc:.4f} "
-                  f"expert_share={np.round(expert_share, 2).tolist()} "
-                  f"time={time.time()-t0:.1f}s")
+            print(f"  [final eval] acc={final_acc:.4f} "
+                  f"expert_share={np.round(expert_share, 2).tolist()}")
+        return final_acc
     return best_val
 
 
@@ -232,6 +279,7 @@ def train_final_moe(
     data_dir: Path,
     *,
     mode: str = "learnable",          # "learnable" | "cluster"
+    final: bool = False,
     init_channels: int = 16,
     num_classes: int = 100,
     gate_channels: int = 16,
@@ -243,7 +291,14 @@ def train_final_moe(
     device: str = "cuda:0",
     verbose: bool = True,
 ) -> dict:
-    """Обучить финальный MoE и вернуть dict с метриками."""
+    """Обучить MoE и вернуть dict с метриками.
+
+    final=False (поиск/промежуточная оценка): обучение на train, оценка на
+        val каждую эпоху → результат в ключе 'val_acc' (лучшая за эпохи).
+    final=True (финальная модель): обучение на train ∪ val фиксированное
+        число эпох, единственная оценка на отложенном test после последней
+        эпохи → результат в ключе 'test_acc'. Никакого подглядывания в test.
+    """
     if mode not in ("learnable", "cluster"):
         raise ValueError(f"Unknown mode: {mode}")
     if mode == "cluster" and hard_assignments is None:
@@ -254,9 +309,14 @@ def train_final_moe(
     random.seed(seed)
 
     data_dir = Path(data_dir)
+    tag = f"{mode}/{'final' if final else 'search'}"
 
     if mode == "learnable":
-        X_tr, y_tr, X_v, y_v = load_cifar100_tensors(data_dir)
+        if final:
+            X_tr, y_tr = load_cifar100_tensors_trainval(data_dir)
+            X_eval, y_eval = load_cifar100_test_tensors(data_dir)
+        else:
+            X_tr, y_tr, X_eval, y_eval = load_cifar100_tensors(data_dir)
         moe = CIFAR100MoE(
             configs=configs,
             init_channels=init_channels,
@@ -264,17 +324,24 @@ def train_final_moe(
             gate_channels=gate_channels,
         )
         n_params = sum(p.numel() for p in moe.parameters())
-        print(f"[final-moe/{mode}] params: {n_params:,}")
+        print(f"[final-moe/{tag}] params: {n_params:,}, "
+              f"train={len(X_tr)}, eval={len(X_eval)}")
         t0 = time.time()
-        val_acc = train_moe(
-            moe, X_tr, y_tr, X_v, y_v,
+        acc = train_moe(
+            moe, X_tr, y_tr, X_eval, y_eval,
             epochs=epochs, batch_size=batch_size,
             lr=lr, wd=wd, device=device, verbose=verbose,
+            eval_each_epoch=not final,
         )
     else:  # cluster
-        X_tr, y_tr, c_tr, X_v, y_v, c_v = (
-            load_cifar100_tensors_with_clusters(data_dir)
-        )
+        if final:
+            X_tr, y_tr, c_tr, X_eval, y_eval, c_eval = (
+                load_cifar100_tensors_with_clusters_trainval_test(data_dir)
+            )
+        else:
+            X_tr, y_tr, c_tr, X_eval, y_eval, c_eval = (
+                load_cifar100_tensors_with_clusters(data_dir)
+            )
         moe = ClusterGatedMoE(
             configs=configs,
             hard_assignments=hard_assignments,
@@ -282,25 +349,29 @@ def train_final_moe(
             num_classes=num_classes,
         )
         n_params = sum(p.numel() for p in moe.parameters())
-        print(f"[final-moe/{mode}] params: {n_params:,} "
-              f"(M={moe.M}, K={moe.K})")
+        print(f"[final-moe/{tag}] params: {n_params:,} (M={moe.M}, K={moe.K}), "
+              f"train={len(X_tr)}, eval={len(X_eval)}")
         from collections import Counter
         share = Counter(int(a) for a in hard_assignments)
-        print(f"[final-moe/{mode}] cluster→expert counts: "
+        print(f"[final-moe/{tag}] cluster→expert counts: "
               f"{dict(sorted(share.items()))}")
         t0 = time.time()
-        val_acc = train_cluster_gated_moe(
-            moe, X_tr, y_tr, c_tr, X_v, y_v, c_v,
+        acc = train_cluster_gated_moe(
+            moe, X_tr, y_tr, c_tr, X_eval, y_eval, c_eval,
             epochs=epochs, batch_size=batch_size,
             lr=lr, wd=wd, device=device, verbose=verbose,
+            eval_each_epoch=not final,
         )
 
     elapsed = time.time() - t0
-    print(f"[final-moe/{mode}] best val_acc = {val_acc:.4f} "
-          f"(time={elapsed:.1f}s)")
-    return {
+    acc_key = "test_acc" if final else "val_acc"
+    print(f"[final-moe/{tag}] {acc_key} = {acc:.4f} (time={elapsed:.1f}s)")
+    result = {
         "mode": mode,
-        "val_acc": float(val_acc),
+        "final": final,
+        acc_key: float(acc),
+        "n_train": int(len(X_tr)),
+        "n_eval": int(len(X_eval)),
         "epochs": epochs,
         "batch_size": batch_size,
         "lr": lr,
@@ -311,6 +382,7 @@ def train_final_moe(
         "seed": seed,
         "time_sec": elapsed,
     }
+    return result
 
 
 # ==========================================================================
@@ -345,6 +417,10 @@ def main():
                         choices=["learnable", "cluster", "both"],
                         help="Какой gating обучать")
     parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--final", action="store_true",
+                        help="Финальная модель: обучать на train ∪ val, "
+                             "оценивать один раз на отложенном test "
+                             "(метрика → test_acc).")
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--wd", type=float, default=3e-4)
@@ -384,13 +460,15 @@ def main():
     if not isinstance(final_results, dict):
         final_results = {}
 
+    acc_key = "test_acc" if args.final else "val_acc"
     for mode in modes:
-        print(f"\n=== final training: mode={mode} ===")
+        print(f"\n=== final training: mode={mode} (final={args.final}) ===")
         r = train_final_moe(
             configs=configs,
             hard_assignments=hard_assignments,
             data_dir=data_dir,
             mode=mode,
+            final=args.final,
             init_channels=args.init_channels,
             num_classes=num_classes,
             gate_channels=args.gate_channels,
@@ -404,7 +482,7 @@ def main():
 
     print("\n=== summary ===")
     for mode, r in final_results.items():
-        print(f"  {mode:>10s}: val_acc = {r['val_acc']:.4f}")
+        print(f"  {mode:>10s}: {acc_key} = {r.get(acc_key, r.get('val_acc')):.4f}")
 
     if args.update_json:
         section["final_moe"] = final_results

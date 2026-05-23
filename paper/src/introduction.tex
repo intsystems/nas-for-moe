@@ -1,0 +1,49 @@
+\section{Introduction}
+\label{sec:introduction}
+
+
+The Mixture-of-Experts (MoE) architecture, in which input is partitioned through a gating function and subsequently routed as weighted input to specialized experts \cite{jacobs1991adaptive, jordan1994hierarchical, jacobs1997bayesian}, has been well-established in the literature for decades \cite{mu2025comprehensive}.
+Scenarios in which the experts are classical statistical models are well characterized in the literature \cite{piwko2025divide}, particularly when the experts are modeled as logistic regressors \citep{nguyen2023general} or as Gaussian models \citep{nguyen2023demystifying, rasmussen2001infinite}.
+In recent years, concurrent with the growing interest in neural networks, researchers began exploring the application of MoE structures to deep learning architectures \cite{eigen2013learning}.
+This efficiency was achieved through sparse gating mechanisms, where the input is routed only to a fixed number of experts, which is significantly smaller than the complete set \cite{shazeer2017outrageously, riquelme2021scaling, fedus2022switch}.
+MoE architectures found widespread adoption in the transformer domain, where model size plays a crucial role in achieving superior performance \cite{jiang2024mixtral, qiu2025demons, dai2024deepseekmoe}.
+
+Simultaneously, the field of Neural Architecture Search (NAS) has developed into a well-studied area \cite{ren2021comprehensive, nayman2019xnas, zoph2018learning}.
+NAS aims to select optimal architectures from a wide range of candidates, addressing the challenge that architecture selection typically requires substantial domain expertise and manual tuning \cite{liu2018darts, ren2021comprehensive}.
+The field has diverged into two main paradigms.
+The first is computationally intensive many-shot NAS, which involves multiple training runs followed by candidate selection using methods such as reinforcement learning \cite{zoph2016neural, baker2016designing} and evolutionary algorithms \cite{real2019regularized, yang2020cars}.
+The second is one-shot NAS, where a single supernet is trained, and the optimal subnet is subsequently selected \cite{liu2018darts, chen2020stabilizing, you2020greedynas}.
+This approach effectively transforms the search problem into finding optimal compression strategies for the supernet \cite{liu2018darts}.
+
+Despite the individual successes of both MoE and NAS methodologies, the application of NAS techniques specifically to MoE architectures remains a relatively underexplored research area, presenting significant opportunities for advancing both efficiency and performance in large-scale neural architectures.
+In contrast to the classical approach where all experts share the same architecture \citep{fedus2022switch}, our study allows architectural heterogeneity between experts.
+We claim that this flexibility enhances the overall efficiency of the resulting architecture by enabling more specialized and adaptable expert networks.
+
+It is important to note that several studies in the literature have addressed the problem of discovering or designing architectures for mixture-of-experts models. In the article \cite{jawahar2022automoe}, the authors employed a comprehensive combination of approaches to discover a fast-operating Mixture-of-Experts (MoE) architecture. The expert weights are derived from a supernet, and the search process is evolutionary in nature. There is a practical work \cite{han2024cmn} in which the authors develop a framework for efficient MoE inference tailored to specific hardware. The work most closely related to ours is \cite{mecharbat2025moenas}, where the authors conduct a search by varying the number of experts in the layers. In contrast to this study, we propose to allow greater flexibility by optimizing the model architectures themselves rather than only the number of experts.
+
+The MoE architecture is inherently well-suited for data with strong clustering properties. There exist theoretical studies, which demonstrate on relatively simple examples that this claim holds \cite{chen2022towards}.
+Additionally, practical researches show the effectiveness of MoE on multimodal datasets \cite{chai2022mixture, guo2018multi, hu2025multi}.
+However, despite these promising results, the underlying mechanisms that enable experts to align with distinct modalities remain insufficiently understood, motivating further investigation into the principles governing modality-specific specialization within MoE frameworks.
+
+Given the foregoing, we formulate the following research question:
+\textit{how can we design conditions under which expert architectures adapt to specific data clusters?}
+In this study, we aim to address this question by examining how models evolve during adaptation to specific data modalities.
+
+
+
+
+
+
+
+
+
+\vspace{2mm}
+
+\textbf{Contributions}
+
+\vspace{2mm}
+
+\begin{itemize}
+    \item \textbf{SA-NAS framework:} We propose a Structure-Aware Neural Architecture Search (SA-NAS) framework that optimizes expert architectures with respect to the clustering structure of the data.
+    \item \textbf{Theoretical understanding:} We provide a theoretical foundation for our method, demonstrating how the data’s clustering structure influences the final architectures identified by the search algorithm.
+\end{itemize}

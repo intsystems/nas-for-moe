@@ -18,8 +18,8 @@
 
 Запуск:
     python eval_sgem_per_expert.py \\
-        --results-json ./runs/results_cifar100_sgem_K3_lb500_mix050.json \\
-        --data-dir ./cifar100_data --epochs 30 --device cuda:0
+        --results-json ./runs_testsplit/results_cifar100_sgem.json \\
+        --data-dir ./cifar100_data_semantic_testsplit --epochs 30 --device cuda:0
 """
 
 from __future__ import annotations

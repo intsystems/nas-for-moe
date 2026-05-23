@@ -75,7 +75,8 @@ def main():
         "--obs-dirs", type=str, nargs="+", required=True,
         help="Список директорий с obs_*.json — все объединяются",
     )
-    parser.add_argument("--data-dir", type=str, default="./cifar100_data",
+    parser.add_argument("--data-dir", type=str,
+                        default="./cifar100_data_semantic_testsplit",
                         help="Для cluster_centers.npy")
     parser.add_argument("--val-fraction", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=SEED)

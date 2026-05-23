@@ -36,6 +36,11 @@ def main():
                     help="Сколько представителей на кластер (кроме mean).")
     ap.add_argument("--method-key", type=str, default=None,
                     help="Ключ метода в JSON (по умолчанию — первый).")
+    ap.add_argument("--max-clusters", type=int, default=None,
+                    help="Показать только первые N кластеров (по умолчанию — все).")
+    ap.add_argument("--no-labels", action="store_true",
+                    help="Не рисовать текст (suptitle, подписи рядов и колонок) — "
+                         "только сетка картинок с цветными рамками по эксперту.")
     args = ap.parse_args()
 
     # --- Данные ---
@@ -74,13 +79,17 @@ def main():
     print(f"[plot] method key: {key}, K={K}, M={M}")
 
     # --- Рисунок ---
+    show = list(range(M))
+    if args.max_clusters is not None:
+        show = show[: args.max_clusters]
+    n_rows = len(show)
     n_rep = args.n_rep
     fig, axes = plt.subplots(
-        M, n_rep + 1, figsize=(n_rep + 1, M),
+        n_rows, n_rep + 1, figsize=(n_rep + 1, n_rows),
         gridspec_kw={"wspace": 0.05, "hspace": 0.05},
     )
 
-    for m in range(M):
+    for row, m in enumerate(show):
         mask = train_cid == m
         idx_m = np.where(mask)[0]
         imgs = X_train[idx_m]                            # [n_m, 3, 32, 32]
@@ -106,31 +115,33 @@ def main():
         expert = hard_assignments[m]
         color = EXPERT_COLORS[expert % len(EXPERT_COLORS)]
 
-        ax0 = axes[m, 0]
+        ax0 = axes[row, 0]
         ax0.imshow(np.clip(proto, 0, 1))
         ax0.set_xticks([]); ax0.set_yticks([])
-        ax0.set_ylabel(
-            f"c{m}\nE{expert}\nn={n_m}\n{top_str}",
-            rotation=0, labelpad=34, fontsize=6, va="center", color=color,
-        )
+        if not args.no_labels:
+            ax0.set_ylabel(
+                f"c{m}\nE{expert}\nn={n_m}\n{top_str}",
+                rotation=0, labelpad=34, fontsize=6, va="center", color=color,
+            )
         for spine in ax0.spines.values():
             spine.set_edgecolor(color); spine.set_linewidth(2)
 
         for j in range(n_rep):
-            ax = axes[m, j + 1]
+            ax = axes[row, j + 1]
             if j < len(sel):
                 ax.imshow(sel[j].transpose(1, 2, 0))
             ax.set_xticks([]); ax.set_yticks([])
 
-    axes[0, 0].set_title("mean", fontsize=8)
-    for j in range(n_rep):
-        axes[0, j + 1].set_title(f"#{j}", fontsize=8)
+    if not args.no_labels:
+        axes[0, 0].set_title("mean", fontsize=8)
+        for j in range(n_rep):
+            axes[0, j + 1].set_title(f"#{j}", fontsize=8)
 
-    plt.suptitle(
-        f"CIFAR-100 cluster representatives ({key}, M={M} clusters, K={K} experts)\n"
-        "rows: cluster id / expert / size / top-3 classes   |   col 0: mean   cols 1-N: nearest to mean",
-        fontsize=9, y=0.995,
-    )
+        plt.suptitle(
+            f"CIFAR-100 cluster representatives ({key}, M={M} clusters, K={K} experts)\n"
+            "rows: cluster id / expert / size / top-3 classes   |   col 0: mean   cols 1-N: nearest to mean",
+            fontsize=9, y=0.995,
+        )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(args.output, dpi=140, bbox_inches="tight")
     print(f"saved: {args.output}")

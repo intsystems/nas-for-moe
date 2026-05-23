@@ -1,6 +1,9 @@
-# Датасет `data/`
+# Датасет `toy_data/`
 
-Путь: `code/toy_experiment/data/`
+Путь: `code/data/toy_data/`
+
+> Картинки (`dataset.png`, `clusters.png`, `ideal_split.png`) лежат здесь же.
+> Фигуры для слайдов/статьи — в `slides/figures/`.
 
 Создан скриптом `toy_generate_dataset.py` (с параметрами по умолчанию, seed=322), затем кластеризован `toy_clustering.py` (20 кластеров, seed=322).
 

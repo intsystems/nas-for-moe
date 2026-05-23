@@ -1,0 +1,34 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented SA-NAS, a Structure-Aware Neural Architecture Search
+framework for Mixture-of-Experts models, which couples per-expert
+architecture search with the cluster structure of the underlying
+data. The framework relies on a Graph Neural Network surrogate that
+predicts validation accuracy from an architecture description and a
+binary cluster mask, trained inside an active-learning loop with
+Monte-Carlo dropout uncertainty estimates. Three optimisation
+algorithms (sampling, Gumbel-Softmax gradient and EM) instantiate the
+same cluster-aware MoE objective and share a common implementation
+of the surrogate.
+
+On the controlled toy problem the EM variant recovers the ideal
+linear/ring split with $K = 2$ experts, confirming that the
+formulation is well posed when the surrogate is reliable. On a
+heterogeneous CIFAR-100 / SVHN mixture with semantic clustering and
+$K = 2$ experts, however, SAGEM with cluster gating reaches only
+$0.5935 \pm 0.003$ test accuracy --- statistically indistinguishable
+from a random-split DARTS$\times K$ MoE, and the learned routing
+agrees with the oracle data-source partition on only about $60\%$ of
+clusters. Our diagnostic analysis shows that this comes from a
+self-reinforcing bias in the surrogate dataset rather than from the EM
+optimiser itself.
+
+The most promising direction for future work is therefore to remove
+this bias --- for example by enforcing permutation invariance of the
+surrogate across experts, or by symmetrising the active-learning
+data collection so that every expert sees the same distribution of
+cluster masks. We also plan to scale the search space, to extend the
+framework to transformer-based MoE layers, and to develop tighter
+theoretical guarantees for the cluster-aware objective when the
+surrogate is consistent.

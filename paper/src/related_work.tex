@@ -1,0 +1,70 @@
+\section{Related Work}
+\label{sec:related_work}
+
+\noindent
+
+\vspace{2mm}
+
+\textbf{Mixture-of-Experts.}
+The Mixture-of-Experts (MoE) framework was originally introduced
+in~\cite{jacobs1991adaptive,jordan1994hierarchical,jacobs1997bayesian}
+as a way to combine specialised statistical models through a learnable
+gating mechanism. Subsequent theoretical analyses characterised
+identifiability and convergence in classical MoE
+formulations~\cite{nguyen2023general,nguyen2023demystifying,piwko2025divide,rasmussen2001infinite}.
+With the rise of deep learning, MoE has been revived in the form of
+sparsely activated neural networks, where the gate routes each input
+to only a small subset of
+experts~\cite{eigen2013learning,shazeer2017outrageously,riquelme2021scaling,fedus2022switch}.
+This sparse formulation enables training of models with hundreds of
+billions of parameters while keeping per-token compute roughly
+constant, and is now a standard building block of modern large-scale
+transformers~\cite{jiang2024mixtral,dai2024deepseekmoe,qiu2025demons}.
+
+\vspace{2mm}
+
+\textbf{Neural Architecture Search.}
+Neural Architecture Search (NAS) automates the design of neural
+networks and has matured into a wide research
+field~\cite{ren2021comprehensive}. Many-shot approaches based on
+reinforcement learning~\cite{zoph2016neural,baker2016designing,zoph2018learning}
+or evolutionary search~\cite{real2019regularized,yang2020cars}
+explicitly train candidate architectures and select the best
+performer. One-shot methods reduce the search cost by training a
+single supernet that contains all candidate architectures as
+sub-networks~\cite{liu2018darts,chen2020stabilizing,you2020greedynas,nayman2019xnas}.
+DARTS~\cite{liu2018darts} is the most prominent representative of this
+family and forms one of the baselines we compare against in our
+experimental study.
+
+\vspace{2mm}
+
+\textbf{Neural Architecture Search for Mixture-of-Experts.}
+The intersection of NAS and MoE is a comparatively recent and still
+sparsely populated research area. AutoMoE~\cite{jawahar2022automoe}
+applies an evolutionary search on top of a shared supernet to obtain
+heterogeneous MoE architectures for neural machine translation.
+CMN~\cite{han2024cmn} co-designs MoE topologies for
+computing-in-memory hardware. The work most closely related to ours
+is MoE-NAS~\cite{mecharbat2025moenas}, which optimises the number of
+experts per layer but keeps the expert architectures shared. In
+contrast, we explicitly search over per-expert architectures and tie
+this search to the cluster structure of the input data.
+
+\vspace{2mm}
+
+\textbf{Theoretical Understanding.}
+A growing body of theoretical work studies why MoE models perform
+well on data with strong cluster or modality structure.
+\cite{chen2022towards} proves on simplified settings that MoE
+provably benefits from clusterable data, while~\cite{li2024theory}
+analyses the optimisation landscape of sparse gates. Empirical
+evidence from multimodal and multi-task
+learning~\cite{chai2022mixture,guo2018multi,hu2025multi,zhou2022mixture}
+further supports the claim that experts naturally specialise to
+distinct sub-distributions. Our work builds on this perspective and
+turns it into an explicit search objective by optimising over
+\emph{per-cluster} expert architectures rather than treating the
+cluster structure as a by-product of training.
+
+\vspace{2mm}

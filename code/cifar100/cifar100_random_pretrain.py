@@ -2,18 +2,19 @@
 Сбор случайного датасета и pretraining суррогата на подмножестве CIFAR-100.
 
 Этапы:
-  1. Загрузка подготовленных CIFAR-100 данных из cifar100_data/.
+  1. Загрузка подготовленных CIFAR-100 данных из cifar100_data_semantic_testsplit/.
   2. Сэмплирование N пар (random arch, random b) + реальное обучение.
-  3. Сохранение наблюдений в cifar100_random_dataset/obs_*.json.
+  3. Сохранение наблюдений в runs_testsplit/cifar100_random_dataset/obs_*.json.
   4. Обучение суррогата (GAT_Datafeature) на собранном датасете.
-  5. Сохранение весов в surr_cifar100_pretrained.pth.
+  5. Сохранение весов в runs_testsplit/surr_cifar100_pretrained.pth.
 
 Запуск:
-    # 1. Подготовить данные
-    python prepare_cifar100.py --output-dir ./cifar100_data --n-classes 20 --fraction 0.5
+    # 1. Подготовить данные (с отложенным test-сплитом)
+    python prepare_cifar100_semantic.py --output-dir ./cifar100_data_semantic_testsplit \\
+        --fraction 0.7 --n-clusters 30 --val-size 0.15 --test-size 0.15 --device cuda:0
 
-    # 2. Pretrain суррогата
-    python cifar100_random_pretrain.py --device cuda:0 --data-dir ./cifar100_data
+    # 2. Pretrain суррогата (дефолтные пути уже указывают на _testsplit)
+    python cifar100_random_pretrain.py --device cuda:0
 """
 
 import argparse
@@ -40,14 +41,16 @@ def main():
     parser = argparse.ArgumentParser(
         description="Random dataset collection + surrogate pretraining on CIFAR-100 subset"
     )
-    # --- Данные (подготовлены prepare_cifar100.py) ---
-    parser.add_argument("--data-dir", type=str, default="./cifar100_data",
-                        help="Директория с подготовленными данными (prepare_cifar100.py)")
+    # --- Данные (подготовлены prepare_cifar100_semantic.py) ---
+    parser.add_argument("--data-dir", type=str,
+                        default="./cifar100_data_semantic_testsplit",
+                        help="Директория с подготовленными данными "
+                             "(prepare_cifar100_semantic.py)")
     # --- Результаты ---
     parser.add_argument("--save-dir", type=str,
-                        default="./runs/cifar100_random_dataset")
+                        default="./runs_testsplit/cifar100_random_dataset")
     parser.add_argument("--checkpoint-path", type=str,
-                        default="./runs/surr_cifar100_pretrained.pth")
+                        default="./runs_testsplit/surr_cifar100_pretrained.pth")
     # --- Бюджет ---
     parser.add_argument("--n-observations", type=int, default=200)
     parser.add_argument("--cell-train-epochs", type=int, default=30)

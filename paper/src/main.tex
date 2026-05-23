@@ -1,0 +1,127 @@
+\documentclass[USenglish]{article}	
+% for 2-column layout use \documentclass[USenglish,twocolumn]{article}
+
+\usepackage[utf8]{inputenc}				%(only for the pdftex engine)
+%\RequirePackage[no-math]{fontspec}[2017/03/31]%(only for the luatex or the xetex engine)
+\usepackage[big,online]{dgruyter}	%values: small,big | online,print,work
+\usepackage{lmodern} 
+\usepackage{microtype}
+\usepackage[numbers,square,sort&compress]{natbib}
+\usepackage{algorithm}
+\usepackage[utf8]{inputenc} % allow utf-8 input
+% babel is loaded by dgruyter.sty; keep English only to avoid option clash
+% \usepackage[english]{babel}
+%\usepackage[T1]{fontenc}    % use 8-bit T1 fonts
+\usepackage{booktabs}       % professional-quality tables
+\usepackage{amsfonts}       % blackboard math symbols
+\usepackage{nicefrac}       % compact symbols for 1/2, etc.
+\usepackage{microtype}      % microtypography
+\usepackage{lipsum}		% Can be removed after putting your text content
+\usepackage{graphicx}
+\usepackage{natbib}
+\usepackage{doi}
+\usepackage{amsmath}
+\usepackage{amsthm}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+% dgruyter.sty hooks caption and expects \plist@<float-type> for every
+% float family that writes into the corresponding *.lo? file. The
+% algorithm package writes into .loa, so we provide the missing macro.
+\makeatletter
+\providecommand\plist@algorithm{\algorithmcfname\space}
+\providecommand\algorithmcfname{Algorithm}
+\makeatother
+\usepackage{appendix}
+
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{wrapfig}
+
+
+\graphicspath{{logos/}, {images/}, {}}
+\DeclareGraphicsExtensions{.pdf,.png,.jpg}
+
+% Цвета 
+\usepackage[dvipsnames]{xcolor}
+\usepackage{color}   
+
+
+% New theorem-like environments will be introduced by using the commands \theoremstyle and \newtheorem.
+% Please note that the environments proof and definition are already defined within dgryuter.sty.
+\theoremstyle{dgthm}
+\newtheorem{theorem}{Theorem}
+\newtheorem{assumption}{Assumption}
+\newtheorem{corollary}{Corollary}
+\newtheorem{proposition}{Proposition}
+\newtheorem{lemma}{Lemma}
+\newtheorem{assertion}{Assertion}
+\newtheorem{result}{Result}
+\newtheorem{conclusion}{Conclusion}
+
+\newtheorem{definition}{Definition}
+\newtheorem{example}{Example}
+\newtheorem{remark}{Remark}
+
+
+
+\begin{document}
+
+	
+%%%--------------------------------------------%%%
+	\articletype{Research Article}
+	\received{Month	DD, YYYY}
+	\revised{Month	DD, YYYY}
+  \accepted{Month	DD, YYYY}
+  \journalname{De~Gruyter~Journal}
+  \journalyear{YYYY}
+  \journalvolume{XX}
+  \journalissue{X}
+  \startpage{1}
+  \aop
+  \DOI{10.1515/sample-YYYY-XXXX}
+%%%--------------------------------------------%%%
+
+\title{Structure Aware Neural Architecture Search for Mixture of Experts}
+\runningtitle{NAS for MoE}
+%\subtitle{Insert subtitle if needed}
+
+\author[1]{Petr Babkin}
+\author[1]{Oleg Bakhteev}
+
+\affil[1]{\protect\raggedright 
+Moscow Institute of Physics and Technology, Intelligent Systems, Moscow, Russia, e-mail: babkin.pk@phystech.edu}
+
+%\communicated{...}
+%\dedication{...}
+	
+\abstract{The Mixture-of-Experts (MoE) layer, a sparsely activated neural architecture controlled by a routing mechanism, has recently achieved remarkable success across large-scale deep learning tasks. In parallel, Neural Architecture Search (NAS) has emerged as a powerful methodology for automatically discovering high-performing neural network. However, the application of NAS methods to MoE architectures remains an underexplored research area. In this work, we propose an architecture search framework for MoE models, which explicitly leverages the underlying cluster structure of the data. We evaluate the proposed approach on computer vision benchmarks and demonstrate that it outperforms baseline MoE architectures trained on the same datasets in terms of accuracy and computational efficiency.}
+
+\keywords{Mixture of Experts, Neural Architecture Search}
+
+\maketitle
+
+\input{introduction.tex}
+
+\input{related_work.tex}
+
+\input{problem_statement.tex}
+
+\input{main_part.tex}
+
+\input{experiments.tex}
+
+\input{conclusion.tex}
+
+\bibliographystyle{unsrtnat}
+
+\bibliography{refs}
+
+\appendix
+
+\input{proof.tex}
+
+\label{sec:appendix}
+
+\end{document}

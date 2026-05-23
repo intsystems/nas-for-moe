@@ -6,16 +6,18 @@
     data_y.npy              — метки int64 [N] (перенумерованы с 0)
     train_indices.npy       — индексы train-точек в data_X
     val_indices.npy         — индексы val-точек в data_X
+    test_indices.npy        — индексы test-точек (отложенная выборка)
     train_cluster_ids.npy   — ID кластера для каждой train-точки
     val_cluster_ids.npy     — ID кластера для каждой val-точки
+    test_cluster_ids.npy    — ID кластера для каждой test-точки
     cluster_centers.npy     — центроиды KMeans [M, pca_dim]
     pca_components.npy      — компоненты PCA [pca_dim, 3072] (для project_to_pca)
     pca_mean.npy            — среднее PCA [3072] (в нормированном [0,1] флэт-пространстве)
     meta.json               — мета-информация (num_classes, class_list и т.д.)
 
 Пример:
-    python prepare_cifar100.py --output-dir ./cifar100_data \
-        --n-classes 20 --fraction 0.5 --n-clusters 20 --seed 322
+    python prepare_cifar100.py --output-dir ./cifar100_data_testsplit \
+        --fraction 0.7 --n-clusters 30 --val-size 0.15 --test-size 0.15 --seed 322
 """
 
 import argparse
@@ -33,7 +35,8 @@ def prepare_cifar100(
     n_classes: int = 100,
     selected_classes: list = None,
     fraction: float = 1.0,
-    test_size: float = 0.2,
+    val_size: float = 0.15,
+    test_size: float = 0.15,
 ):
     from torchvision import datasets
     from sklearn.decomposition import PCA
@@ -96,19 +99,30 @@ def prepare_cifar100(
     pca = PCA(n_components=actual_pca_dim, random_state=seed).fit(X_flat)
     X_pca = pca.transform(X_flat)
 
-    # --- 5. Train/val split + KMeans ---
+    # --- 5. Train/val/test split + KMeans ---
     indices = np.arange(N)
-    train_idx, val_idx = train_test_split(
+    if not (0.0 < test_size < 1.0 and 0.0 < val_size < 1.0 and val_size + test_size < 1.0):
+        raise ValueError(
+            f"Некорректные доли split: val_size={val_size}, test_size={test_size}"
+        )
+    trainval_idx, test_idx = train_test_split(
         indices, test_size=test_size, random_state=seed, stratify=y_sub,
+    )
+    rel_val = val_size / (1.0 - test_size)
+    train_idx, val_idx = train_test_split(
+        trainval_idx, test_size=rel_val, random_state=seed,
+        stratify=y_sub[trainval_idx],
     )
 
     actual_n_clusters = min(n_clusters, len(train_idx))
-    print(f"[5/5] KMeans {actual_n_clusters} clusters on {len(train_idx)} train images...")
+    print(f"[5/5] KMeans {actual_n_clusters} clusters on {len(train_idx)} train images "
+          f"(val={len(val_idx)}, test={len(test_idx)} by nearest centroid)...")
     km = KMeans(n_clusters=actual_n_clusters, random_state=seed, n_init=10).fit(
         X_pca[train_idx]
     )
     train_cluster_ids = km.labels_.astype(np.int64)
     val_cluster_ids = km.predict(X_pca[val_idx]).astype(np.int64)
+    test_cluster_ids = km.predict(X_pca[test_idx]).astype(np.int64)
     cluster_centers = km.cluster_centers_.astype(np.float32)
 
     # --- Сохранение ---
@@ -116,8 +130,10 @@ def prepare_cifar100(
     np.save(output_dir / "data_y.npy", y_sub)
     np.save(output_dir / "train_indices.npy", train_idx)
     np.save(output_dir / "val_indices.npy", val_idx)
+    np.save(output_dir / "test_indices.npy", test_idx)
     np.save(output_dir / "train_cluster_ids.npy", train_cluster_ids)
     np.save(output_dir / "val_cluster_ids.npy", val_cluster_ids)
+    np.save(output_dir / "test_cluster_ids.npy", test_cluster_ids)
     np.save(output_dir / "cluster_centers.npy", cluster_centers)
     # PCA — нужен для маршрутизации произвольного изображения к кластеру:
     # x_pca = (x_flat/255 - pca_mean) @ pca_components.T
@@ -130,6 +146,9 @@ def prepare_cifar100(
         "total_samples": N,
         "n_train": len(train_idx),
         "n_val": len(val_idx),
+        "n_test": len(test_idx),
+        "val_size": val_size,
+        "test_size": test_size,
         "n_clusters": actual_n_clusters,
         "pca_dim": actual_pca_dim,
         "fraction": fraction,
@@ -140,8 +159,8 @@ def prepare_cifar100(
 
     print(f"\nDone! Saved to {output_dir}/")
     print(f"  data_X.npy:            {X_img.shape} uint8")
-    print(f"  data_y.npy:            {y_sub.shape} int64 ({num_classes} classes)")
-    print(f"  train/val:             {len(train_idx)} / {len(val_idx)}")
+    print(f"  data_y.npy:             {y_sub.shape} int64 ({num_classes} classes)")
+    print(f"  train/val/test:        {len(train_idx)} / {len(val_idx)} / {len(test_idx)}")
     print(f"  clusters:              {actual_n_clusters}")
     print(f"  cluster_centers.npy:   {cluster_centers.shape}")
     print(f"  pca_components.npy:    {pca.components_.shape}")
@@ -185,7 +204,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Download, subset and cluster CIFAR-100"
     )
-    parser.add_argument("--output-dir", type=str, default="./cifar100_data",
+    parser.add_argument("--output-dir", type=str, default="./cifar100_data_testsplit",
                         help="Директория для сохранения данных")
     parser.add_argument("--n-classes", type=int, default=100,
                         help="Число классов (первые N из 100)")
@@ -197,8 +216,10 @@ def main():
                         help="Число кластеров KMeans")
     parser.add_argument("--pca-dim", type=int, default=50,
                         help="Размерность PCA")
-    parser.add_argument("--test-size", type=float, default=0.2,
-                        help="Доля валидации (train/val split)")
+    parser.add_argument("--val-size", type=float, default=0.15,
+                        help="Доля val (от полного датасета)")
+    parser.add_argument("--test-size", type=float, default=0.15,
+                        help="Доля отложенного test (от полного датасета)")
     parser.add_argument("--seed", type=int, default=322)
     args = parser.parse_args()
 
@@ -210,6 +231,7 @@ def main():
         n_classes=args.n_classes,
         selected_classes=args.selected_classes,
         fraction=args.fraction,
+        val_size=args.val_size,
         test_size=args.test_size,
     )
 

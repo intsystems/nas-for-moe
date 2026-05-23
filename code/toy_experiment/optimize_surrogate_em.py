@@ -958,6 +958,22 @@ def optimize_surrogate_em(
             loss.backward()
             r_optimizer.step()
 
+            if verbose and _r_step == n_r_gradient_steps - 1:
+                # Логируем масштабы слагаемых на последнем шаге каждого M-step.
+                # Все знаки приведены к "минимизируем loss" (как они входят в loss).
+                with torch.no_grad():
+                    q_part = -q_function.item()
+                    ent_part = -current_entropy_weight * entropy.item()
+                    lb_part = load_balance_weight * load_balance.item()
+                tqdm.write(
+                    f"    [M-step scales] -q_function={q_part:.4f} "
+                    f"(q_log_r={q_log_r.item():.4f}, q_log_u={q_log_u.item():.4f})  "
+                    f"-ew·H={ent_part:.4f}  "
+                    f"lbw·LB={lb_part:.4f} "
+                    f"(LB={load_balance.item():.4f}, lbw={load_balance_weight:.2f})  "
+                    f"loss={loss.item():.4f}"
+                )
+
             # Logit clipping: prevent collapse by bounding logit spread per row
             if max_logit_spread > 0:
                 with torch.no_grad():

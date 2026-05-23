@@ -40,7 +40,7 @@ Working directly on the GPU server. See:
 - @docs/surrogate.md — суррогатная функция: вход/выход, MC Dropout, active learning
 - @docs/theory.md — математическая постановка и методы оптимизации MoE
 - @docs/data-directory.md — описание датасета в `data/` (параметры генерации, кластеризация, файлы)
-- @docs/cifar100-clustering-variants.md — два варианта кластеризации CIFAR-100 (random vs semantic), конвенция имён прогонов, сохранённые obs-датасеты
+- @docs/cifar100-clustering-variants.md — варианты кластеризации CIFAR-100 (random vs semantic), версии layout'а (v1 / `_testsplit`), **протокол оценки: поиск архитектур на val, финал — обучение на train∪val + тест на отложенном test (`test_acc`)**, конвенция имён прогонов, сохранённые obs-датасеты
 - @docs/experiments-log.md — журнал экспериментов CIFAR-100 (val_acc по методам, ключевые выводы, TODO)
 
 **All experiments must run inside the Docker container.** Before running any `docker exec`, ensure the container is running — if not, start it with `docker start nas-for-moe`. See @docs/docker.md for details.
