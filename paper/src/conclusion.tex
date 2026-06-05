@@ -15,20 +15,26 @@ of the surrogate.
 On the controlled toy problem the EM variant recovers the ideal
 linear/ring split with $K = 2$ experts, confirming that the
 formulation is well posed when the surrogate is reliable. On a
-heterogeneous CIFAR-100 / SVHN mixture with semantic clustering and
-$K = 2$ experts, however, SAGEM with cluster gating reaches only
-$0.5935 \pm 0.003$ test accuracy --- statistically indistinguishable
-from a random-split DARTS$\times K$ MoE, and the learned routing
-agrees with the oracle data-source partition on only about $60\%$ of
-clusters. Our diagnostic analysis shows that this comes from a
-self-reinforcing bias in the surrogate dataset rather than from the EM
-optimiser itself.
+deliberately heterogeneous CIFAR-100 / SVHN mixture, whose
+ground-truth domains give a sharp oracle partition, SGEM recovers that
+partition on $92\%$ of clusters \emph{without ever seeing the source
+labels}: one expert specialises to a pure CIFAR sub-task while the
+other collects the SVHN clusters. Under the resulting hard cluster gate
+it attains $0.620$ test accuracy, ahead of the random-MoE baseline
+($0.547$) and of $K$ copies of a single DARTS architecture ($0.591$),
+and within $1.3$~p.p.\ of an oracle MoE ($0.633$) that is handed the
+true split. A diagnostic analysis was decisive: an earlier pipeline
+that scored experts on the whole validation set and sampled cluster
+masks uniformly never exposed the surrogate to near-pure subsets and
+collapsed the routing, whereas region-restricted evaluation together
+with a domain-agnostic log-uniform mask sampler removes this bias and
+lets the cluster-aware objective discover the data structure on its
+own.
 
-The most promising direction for future work is therefore to remove
-this bias --- for example by enforcing permutation invariance of the
-surrogate across experts, or by symmetrising the active-learning
-data collection so that every expert sees the same distribution of
-cluster masks. We also plan to scale the search space, to extend the
-framework to transformer-based MoE layers, and to develop tighter
-theoretical guarantees for the cluster-aware objective when the
-surrogate is consistent.
+These results are obtained on a two-domain benchmark with $K = 2$ and
+a modest number of seeds; broadening to more domains, larger $K$, and a
+wider seed sweep is the natural next step. We also plan to scale the
+search space, to extend the framework to transformer-based MoE layers,
+and to strengthen the theory for the cluster-aware objective --- in
+particular by folding the load-balancing term, which the present
+convergence analysis omits, into the guarantee.

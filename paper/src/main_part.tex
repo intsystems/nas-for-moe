@@ -4,7 +4,7 @@
 \subsection{Surrogate Function}
 \label{subsec:surr}
 
-Direct optimisation of Problem~\ref{eq:moes_decomposed} requires
+Direct optimisation of Problem~\ref{eq:moe_likelihood} requires
 repeatedly training neural networks for many architecture candidates,
 which is prohibitively expensive in the MoE setting where each
 evaluation already involves $K$ networks. To address this
@@ -13,7 +13,7 @@ surrogate model.
 
 \begin{figure}[h]
 	\centering
-    \includegraphics[width=0.9\textwidth]{main_frame}
+    \includegraphics[width=0.7\textwidth]{main_frame}
 	\caption{Method workflow: a surrogate model $u$ is used to select
     the most suitable expert architectures for each cluster.}
 	\label{fig:graph_compare}
@@ -27,20 +27,23 @@ and for $\boldsymbol{b} \in \{0, 1\}^M$ let
 $\mathcal{D}_{\boldsymbol{b}} = \bigcup_{m: b_m = 1} \mathcal{C}_m$ be
 the cluster subset selected by~$\boldsymbol{b}$. A \emph{surrogate function}
 \begin{equation}
-u: \mathcal{A} \times \{0, 1\}^M \to \mathbb{R}, \qquad
+u: \mathcal{A} \times \{0, 1\}^M \to \mathbb{R}_{\geq 0}, \qquad
 u(\boldsymbol{\alpha}, \boldsymbol{b}) \approx
-\mathrm{acc}_{\mathrm{val}}\!\left(f(\boldsymbol{\alpha}, \boldsymbol{w}^*_{\boldsymbol{\alpha}, \boldsymbol{b}})\right),
+\mathrm{CE}_{\mathrm{val}}\!\left(f(\boldsymbol{\alpha}, \boldsymbol{\theta}^*_{\boldsymbol{\alpha}, \boldsymbol{b}})\right),
 \end{equation}
-predicts the validation accuracy of architecture $\boldsymbol{\alpha}$
-when trained on $\mathcal{D}_{\boldsymbol{b}}$, without performing
-the actual training.
+predicts the \emph{mean per-sample cross-entropy loss}
+(i.e.\ the negative mean log-likelihood of the correct class) of
+architecture $\boldsymbol{\alpha}$ when trained on
+$\mathcal{D}_{\boldsymbol{b}}$, without performing the actual
+training. This is the same quantity that enters the MoE objective
+\eqref{eq:moe_objective} through $e^{-u(\boldsymbol{\alpha}_k, \mathbf{r}_k)}$.
 \end{definition}
 
 The surrogate is trained on a dataset of architecture/subset pairs
 collected by genuine training:
 \begin{equation}
 \mathcal{D}_{\text{surr}} = \{(\boldsymbol{\alpha}^{(i)}, \boldsymbol{b}^{(i)}, y^{(i)})\}_{i=1}^{N}, \qquad
-y^{(i)} = \mathrm{acc}_{\mathrm{val}}\!\bigl(f(\boldsymbol{\alpha}^{(i)}, \boldsymbol{w}^*_{\boldsymbol{\alpha}^{(i)}, \boldsymbol{b}^{(i)}})\bigr).
+y^{(i)} = \mathrm{CE}_{\mathrm{val}}\!\bigl(f(\boldsymbol{\alpha}^{(i)}, \boldsymbol{\theta}^*_{\boldsymbol{\alpha}^{(i)}, \boldsymbol{b}^{(i)}})\bigr).
 \end{equation}
 We parametrise $u_{\boldsymbol{\theta}}$ as a Graph Neural Network
 encoder over the architecture DAG concatenated with an embedding of
@@ -54,84 +57,157 @@ regression loss
 \bigl(u_{\boldsymbol{\theta}}(\boldsymbol{\alpha}, \boldsymbol{b}) - y\bigr)^2.
 \end{equation}
 
-\paragraph{Active learning with MC Dropout.}
 The surrogate is refined inside an active learning loop. At every
 iteration we use Monte-Carlo dropout to obtain a predictive mean
 $\mu(\boldsymbol{\alpha}, \boldsymbol{b})$ and standard deviation
 $\sigma(\boldsymbol{\alpha}, \boldsymbol{b})$ over $T$ stochastic
-forward passes, and score candidates by the Upper Confidence Bound
-$\mathrm{UCB} = \mu + \sigma$. The most promising candidate is
-trained from scratch, the resulting triple is appended to
-$\mathcal{D}_{\text{surr}}$, and the surrogate is refit. The crucial
+forward passes, and score candidates by the Lower Confidence Bound
+$\mathrm{LCB} = \mu - \sigma$ (since $u$ is a loss, the most
+promising candidates are those with the \emph{lowest} predicted CE
+together with high epistemic uncertainty). The most promising
+candidate is trained from scratch, the resulting triple is appended
+to $\mathcal{D}_{\text{surr}}$, and the surrogate is refit. The crucial
 property of $u_{\boldsymbol{\theta}}$ is that it is trained
 \emph{only on discrete} masks $\boldsymbol{b}$; differentiable
 optimisation must therefore be combined with a relaxation of the
 discrete inputs.
 
-\subsection{Surrogate-assisted Generalized EM (SAGEM)}
+\subsection{Surrogate-assisted Generalized EM (SGEM)}
 \label{subsec:sgem}
 
-Treating the cluster$\to$expert routing as a latent variable yields a
-natural Expectation--Maximisation procedure on
-\eqref{eq:moe_objective}, in which the surrogate $u^{(t)}$ replaces
-the otherwise-intractable expert quality.
+Treating the cluster$\to$expert routing as a latent variable turns the
+surrogate objective~\eqref{eq:moe_objective} into a mixture model on
+which Expectation--Maximisation applies directly, with the surrogate
+$u^{(t)}$ standing in for the otherwise-intractable expert quality. The
+derivation is the standard EM treatment of a finite mixture, the
+per-component data-fit term being the surrogate factor
+$e^{-u(\boldsymbol{\alpha}_k, \mathbf{r}_k)}$.
 
-\textbf{E-step.} For fixed $(\boldsymbol{\alpha}_{1:K}, \mathbf{r})$,
-compute responsibilities
+\textbf{Latent-variable form of the objective.}
+For every sample $n$ introduce a one-hot latent vector
+$\mathbf{z}_n \in \{0, 1\}^K$ with $z_{nk} = 1 \iff$ sample $n$ is
+generated by expert $k$, and collect them into the latent matrix
+$\mathbf{Z} = \|z_{nk}\| \in \{0,1\}^{N \times K}$. The generative
+story is the standard mixture one: the expert of sample $n$ is drawn
+from its cluster's routing distribution,
+$p(z_{nk} = 1) = r_{m(n), k}$, and the label is then emitted with that
+expert's per-sample likelihood
+$e^{-u(\boldsymbol{\alpha}_k, \mathbf{r}_k)}$
+[cf.~\eqref{eq:moe_persample_lik}]. The resulting \emph{complete-data}
+likelihood is
 \begin{equation}
-q_{mk} \;\propto\; r_{mk}\, u(\boldsymbol{\alpha}_k, \mathbf{R}_k),
+\label{eq:complete_data}
+p\bigl(\mathbf{y}, \mathbf{Z} \mid \boldsymbol{\alpha}_{1:K}, \mathbf{R}\bigr)
+\;=\; \prod_{n=1}^{N} \prod_{k=1}^{K}
+\Bigl( r_{m(n), k}\, e^{-u(\boldsymbol{\alpha}_k, \mathbf{r}_k)} \Bigr)^{z_{nk}},
+\end{equation}
+in which the routing $r_{mk}$ acts as the mixing weight and
+$e^{-u(\boldsymbol{\alpha}_k, \mathbf{r}_k)}$ as the per-component
+likelihood.
+
+\emph{Equivalence with~\eqref{eq:moe_objective}.} Each row
+$\mathbf{z}_n$ is one-hot, so marginalising it collapses the inner
+product into a sum,
+$\sum_{\mathbf{z}_n} \prod_{k}(\cdot)^{z_{nk}}
+= \sum_{k} r_{m(n), k}\, e^{-u(\boldsymbol{\alpha}_k, \mathbf{r}_k)}$.
+Because routing and the surrogate are constant within a cluster, the
+$|\mathcal{C}_m|$ samples of cluster $m$ contribute identical factors,
+and grouping them gives the incomplete-data likelihood
+\begin{equation}
+\label{eq:incomplete_data}
+p\bigl(\mathbf{y} \mid \boldsymbol{\alpha}_{1:K}, \mathbf{R}\bigr)
+\;=\; \prod_{m=1}^{M}
+\Bigl(\textstyle\sum_{k=1}^{K} r_{mk}\, e^{-u(\boldsymbol{\alpha}_k, \mathbf{r}_k)}\Bigr)^{|\mathcal{C}_m|},
+\end{equation}
+whose logarithm is \emph{exactly} the cluster-aware objective
+$\mathcal{J}(\boldsymbol{\alpha}_{1:K}, \mathbf{R})$
+of~\eqref{eq:moe_objective}. Maximising~\eqref{eq:moe_objective} is thus
+the incomplete-data MLE of the latent-variable
+model~\eqref{eq:complete_data}, which we now solve by alternating
+maximisation of the variational free energy
+$\mathcal{F}_u(q, \theta) = \mathbb{E}_q[\log p(\mathbf{y}, \mathbf{Z}\mid\theta)] + \mathbb{H}[q]$
+over the posterior $q(\mathbf{Z})$ (E-step) and the parameters
+$\theta = (\boldsymbol{\alpha}_{1:K}, \mathbf{R})$ (M-step).
+
+\textbf{E-step.} At fixed $(\boldsymbol{\alpha}_{1:K}, \mathbf{R})$ the
+free energy is maximised by the exact posterior
+$q(\mathbf{Z}) = p(\mathbf{Z}\mid \mathbf{y}, \boldsymbol{\alpha}_{1:K}, \mathbf{R})$.
+From~\eqref{eq:complete_data},
+$\log q(\mathbf{Z}) \propto \sum_{n}\sum_{k} z_{nk}\bigl(\log r_{m(n),k}
+- u(\boldsymbol{\alpha}_k, \mathbf{r}_k)\bigr)$, so the posterior
+factorises over samples and the responsibility of expert $k$ for sample
+$n$ is the normalised mixture weight
+$\gamma_{nk} \propto r_{m(n),k}\, e^{-u(\boldsymbol{\alpha}_k, \mathbf{r}_k)}$.
+This depends on $n$ only through its cluster $m(n)$, so all samples of a
+cluster share one responsibility, which we write as
+\begin{equation}
+\label{eq:estep}
+q_{mk} \;=\; \frac{r_{mk}\, e^{-u(\boldsymbol{\alpha}_k, \mathbf{r}_k)}}
+{\sum_{j=1}^{K} r_{mj}\, e^{-u(\boldsymbol{\alpha}_j, \mathbf{r}_j)}},
 \qquad \sum_{k=1}^{K} q_{mk} = 1.
 \end{equation}
+Intuitively, a cluster is softly attached to the experts that both
+already claim it ($r_{mk}$ large) and are predicted to model it well
+($u(\boldsymbol{\alpha}_k, \mathbf{r}_k)$ small).
 
-\textbf{M-step (routing).} Maximise
-$\sum_{m,k} q_{mk}\bigl[\log r_{mk} + \log u(\boldsymbol{\alpha}_k, \mathbf{R}_k)\bigr]$
-over $\mathbf{r}$ via gradient ascent on the logits, again with a
-straight-through Gumbel-Softmax for $\mathbf{R}_k$.
-
-\textbf{M-step (architectures).} For each expert $k$ sample new
-candidates $\boldsymbol{\alpha}_k^{\text{new}}$ from the search space
-and accept whenever
-$u(\boldsymbol{\alpha}_k^{\text{new}}, \mathbf{R}_k)
-> u(\boldsymbol{\alpha}_k, \mathbf{R}_k)$.
-
-\paragraph{Load-balancing penalty.}
-Because the surrogate is biased towards the strongest expert seen
-during data collection, the EM dynamics tend to collapse all clusters
-onto a single expert. We mitigate this by adding to the M-step
-objective a load-balancing penalty
+\textbf{M-step.} Substituting the E-step posterior into
+$\mathbb{E}_q[\log p(\mathbf{y}, \mathbf{Z}\mid\cdot)]$ and grouping the
+sample-level terms by cluster yields the $Q$-function
 \begin{equation}
-\mathrm{LB}(\mathbf{r}) \;=\; K \cdot
-\sum_{k=1}^{K}\bar{r}_k \cdot p_k, \qquad
-\bar{r}_k = \frac{1}{M}\sum_{m=1}^{M} r_{mk}, \quad
-p_k = \frac{|\{m : \arg\max_{k'} r_{mk'} = k\}|}{M},
+\label{eq:qfun_main}
+Q(\boldsymbol{\alpha}_{1:K}, \mathbf{R})
+\;=\; \sum_{m=1}^{M} |\mathcal{C}_m| \sum_{k=1}^{K} q_{mk}
+\bigl[\log r_{mk} \,-\, u(\boldsymbol{\alpha}_k, \mathbf{r}_k)\bigr],
 \end{equation}
-weighted by a coefficient $\lambda_{\text{LB}}$. This penalty is
-minimal when the routing is uniform across experts and saturates at
-$K$ under full collapse, providing the regulariser used in our
-experiments.
+which the M-step maximises over the routing $\mathbf{R}$ and the
+per-expert architectures $\boldsymbol{\alpha}_{1:K}$ (maximising $Q$ at
+fixed $q$ coincides with maximising $\mathcal{F}_u(q, \cdot)$, as the
+entropy $\mathbb{H}[q]$ is independent of $\theta$). The two parameter
+blocks are updated in turn.
+
+\emph{M-step (routing).} For fixed architectures, $Q$ is maximised over
+$\mathbf{R}$ subject to $\sum_k r_{mk}=1$ by gradient ascent on the
+routing logits, using a straight-through Gumbel-Softmax to back-propagate
+through the discrete masks $\mathbf{r}_k$ that the surrogate consumes
+(recall $u$ is trained only on binary $\mathbf{b}$). The term
+$\sum_{m,k} |\mathcal{C}_m|\, q_{mk}\log r_{mk}$ alone is a cross-entropy
+whose constrained optimum is $r_{mk}=q_{mk}$, i.e.\ it pulls the routing
+towards the current responsibilities, while the
+$-q_{mk}\,u(\boldsymbol{\alpha}_k, \mathbf{r}_k)$ term additionally
+biases each column $\mathbf{r}_k$ towards masks on which expert $k$ is
+predicted to perform well.
+
+\emph{M-step (architectures).} For fixed routing the only
+architecture-dependent part of~\eqref{eq:qfun_main} is
+$-\sum_{m} |\mathcal{C}_m|\, q_{mk}\, u(\boldsymbol{\alpha}_k, \mathbf{r}_k)$,
+so each expert is optimised independently by \emph{minimising} its
+responsibility-weighted surrogate loss. Since
+$u$ is non-differentiable in $\boldsymbol{\alpha}$, we sample candidate
+architectures from the search space and keep, for each expert $k$, the
+candidate with the lowest $u(\boldsymbol{\alpha}_k, \mathbf{r}_k)$.
 
 \begin{algorithm}[h]
-\caption{Surrogate-assisted Generalized EM (SAGEM) for MoE Architecture Search}
+\caption{Surrogate-assisted Generalized EM (SGEM) for MoE Architecture Search}
 \label{alg:sgem}
 \begin{algorithmic}[1]
 \Require Surrogate $u_{\boldsymbol{\theta}}$, search space
 $\mathcal{A}$, number of experts~$K$, clusters $M$,
-weight $\lambda_{\text{LB}}$, EM iterations $T$.
+EM iterations $T$.
 \State Initialise architectures
 $\boldsymbol{\alpha}_1, \dots, \boldsymbol{\alpha}_K$ at random and
 logits $\boldsymbol{\ell}\!\in\!\mathbb{R}^{M\times K}\!\sim\!\mathcal{N}(\mathbf{0}, I)$.
 \For{$t = 1$ to $T$}
-    \State \textbf{E-step.} $\;q_{mk} \propto r_{mk}\, u(\boldsymbol{\alpha}_k, \mathbf{R}_k)$.
+    \State \textbf{E-step.} $\;q_{mk} \propto r_{mk}\, e^{-u(\boldsymbol{\alpha}_k, \mathbf{r}_k)}$.
     \State \textbf{M-step (r).} Gradient ascent on
-    $\sum q_{mk}[\log r_{mk} + \log u] - \lambda_{\text{LB}}\,\mathrm{LB}(\mathbf{r})$
-    using straight-through Gumbel-Softmax for $\mathbf{R}_k$.
+    $\sum_m |\mathcal{C}_m|\sum_k q_{mk}[\log r_{mk} - u(\boldsymbol{\alpha}_k, \mathbf{r}_k)]$
+    using straight-through Gumbel-Softmax for $\mathbf{r}_k$.
     \State \textbf{M-step ($\boldsymbol{\alpha}$).} For each expert
-    $k$, sample candidates and keep the best under $u(\cdot, \mathbf{R}_k)$.
+    $k$, sample candidates and keep the one with the lowest $u(\cdot, \mathbf{r}_k)$.
     \State \textbf{Active learning step.} Train selected candidates,
     update $\mathcal{D}_{\text{surr}}$, refit $u_{\boldsymbol{\theta}}$.
 \EndFor
 \State \Return $\boldsymbol{\alpha}_{1:K}$ and hard assignment
-$\hat{r}_{mk} = \mathbb{1}[k = \arg\max_{k'} r_{mk'}]$.
+$\hat{r}_{mk} = 1, [k = \arg\max_{k'} r_{mk'}]$.
 \end{algorithmic}
 \end{algorithm}
 
@@ -143,33 +219,46 @@ $u^{(t)}$ used inside the E- and M-steps is itself updated across
 iterations, so the classical monotonicity argument for
 EM~\cite{dempster1977em,wu1983convergence} no longer applies
 directly. We show that, provided the surrogate error decays fast
-enough, SAGEM still converges in the same sense as Generalised EM.
+enough, SGEM still converges in the same sense as Generalised EM.
 
 Let $u_{\mathrm{true}}$ denote the (unknown) ground-truth expert
-quality. Define the per-iteration surrogate error
+loss, i.e.\ the per-sample CE attained by training architecture
+$\boldsymbol{\alpha}$ on the cluster subset $\mathbf{r}$. Define the
+per-iteration surrogate error directly in the loss scale,
 \begin{equation}
+\label{eq:eps_t}
 \varepsilon_t \;=\; \sup_{\boldsymbol{\alpha} \in \mathcal{A}, \;
-\boldsymbol{R} \in [0, 1]^M}
-\bigl|\log u^{(t)}(\boldsymbol{\alpha}, \boldsymbol{R})
-\;-\; \log u_{\mathrm{true}}(\boldsymbol{\alpha}, \boldsymbol{R})\bigr|,
+\mathbf{r} \in [0, 1]^M}
+\bigl|u^{(t)}(\boldsymbol{\alpha}, \mathbf{r})
+\;-\; u_{\mathrm{true}}(\boldsymbol{\alpha}, \mathbf{r})\bigr|.
 \end{equation}
-the parameter $\theta = (\boldsymbol{\alpha}_{1:K}, \mathbf{r})$ on
-the compact set
-$\Theta = \mathcal{A}^K \times (\Delta_K)^M$, the true log-likelihood
-$L_{\mathrm{true}}(\theta) = \sum_m \log \sum_k r_{mk}
-u_{\mathrm{true}}(\boldsymbol{\alpha}_k, \mathbf{R}_k)$ and the
-\emph{true} Q-function
-$Q_{\mathrm{true}}(\theta; \theta') = \sum_{m,k} w_{mk}(\theta')
-\log\!\bigl(r_{mk}\, u_{\mathrm{true}}(\boldsymbol{\alpha}_k, \mathbf{R}_k)\bigr)$
-with $w_{mk}(\theta')$ the responsibilities computed under
-$u_{\mathrm{true}}$.
+The parameter $\theta = (\boldsymbol{\alpha}_{1:K}, \mathbf{R})$ lies
+on the compact set
+$\Theta = \mathcal{A}^K \times (\Delta_K)^M$; we write
+$N = \sum_m |\mathcal{C}_m|$ for the total sample count. The (size-weighted)
+true log-likelihood is
+\begin{equation}
+\label{eq:Ltrue}
+L_{\mathrm{true}}(\theta) \;=\; \sum_{m=1}^M |\mathcal{C}_m|\,\log
+\sum_{k=1}^K r_{mk}\, e^{-u_{\mathrm{true}}(\boldsymbol{\alpha}_k, \mathbf{r}_k)},
+\end{equation}
+and the \emph{true} Q-function is
+\begin{equation}
+\label{eq:Qtrue}
+Q_{\mathrm{true}}(\theta; \theta') \;=\; \sum_{m=1}^M |\mathcal{C}_m|
+\sum_{k=1}^K w_{mk}(\theta')
+\bigl[\log r_{mk} \,-\, u_{\mathrm{true}}(\boldsymbol{\alpha}_k, \mathbf{r}_k)\bigr],
+\end{equation}
+where $w_{mk}(\theta')$ are the responsibilities computed under
+$u_{\mathrm{true}}$ (Proposition~\ref{prop:elbo} in
+Appendix~\ref{sec:proof}).
 
 \begin{assumption}
 \label{ass:bounded}
-There exist $0 < c \leq C < \infty$ such that
-$c \leq u_{\mathrm{true}}(\boldsymbol{\alpha}, \mathbf{R}),\,
-u^{(t)}(\boldsymbol{\alpha}, \mathbf{R}) \leq C$ for all
-$\boldsymbol{\alpha}\in\mathcal{A}$, $\mathbf{R}\in[0,1]^M$, $t\geq 0$.
+There exists $U_{\max} < \infty$ such that
+$0 \leq u_{\mathrm{true}}(\boldsymbol{\alpha}, \mathbf{r}),\,
+u^{(t)}(\boldsymbol{\alpha}, \mathbf{r}) \leq U_{\max}$ for all
+$\boldsymbol{\alpha}\in\mathcal{A}$, $\mathbf{r}\in[0,1]^M$, $t\geq 0$.
 \end{assumption}
 
 \begin{assumption}
@@ -183,19 +272,21 @@ The M-step of Algorithm~\ref{alg:sgem} is generalised, i.e.\ for every
 $t$ it returns $\theta^{(t+1)}$ with
 $\mathcal{F}_{u^{(t)}}(q^{(t)}, \theta^{(t+1)})
 \geq \mathcal{F}_{u^{(t)}}(q^{(t)}, \theta^{(t)})$,
-where $\mathcal{F}_v(q, \theta) = \sum_{m,k} q_{mk}
-\log\!\bigl(r_{mk} v(\boldsymbol{\alpha}_k, \mathbf{R}_k)/q_{mk}\bigr)$
-is the variational free energy.
+where the variational free energy is
+\begin{equation*}
+\mathcal{F}_u(q, \theta) \;=\; \sum_{m=1}^M |\mathcal{C}_m|
+\sum_{k=1}^K q_{mk}\,\log\!\frac{r_{mk}\, e^{-u(\boldsymbol{\alpha}_k, \mathbf{r}_k)}}{q_{mk}}.
+\end{equation*}
 \end{assumption}
 
 \begin{assumption}
 \label{ass:cont}
 For every $\boldsymbol{\alpha}\in\mathcal{A}$ the map
-$\mathbf{R}\mapsto u_{\mathrm{true}}(\boldsymbol{\alpha}, \mathbf{R})$
+$\mathbf{r}\mapsto u_{\mathrm{true}}(\boldsymbol{\alpha}, \mathbf{r})$
 is continuous on $[0,1]^M$.
 \end{assumption}
 
-\begin{theorem}[Convergence of SAGEM with adaptive surrogate]
+\begin{theorem}[Convergence of SGEM with adaptive surrogate]
 \label{thm:sgem}
 Under Assumptions~\ref{ass:bounded}--\ref{ass:cont}, the iterates
 $\{\theta^{(t)}\}$ produced by Algorithm~\ref{alg:sgem} satisfy
@@ -213,7 +304,7 @@ The proof, together with the auxiliary lemmas (uniform deviation of
 the ELBO, stability of the softmax responsibilities, and a
 quasi-monotonicity bound
 $L_{\mathrm{true}}(\theta^{(t+1)}) \geq L_{\mathrm{true}}(\theta^{(t)})
-- 2M\varepsilon_t$ established via a Robbins--Siegmund argument),
+- 2N\varepsilon_t$ established via a Robbins--Siegmund argument),
 is given in Appendix~\ref{sec:proof}.
 
 \begin{remark}
