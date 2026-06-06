@@ -1,0 +1,177 @@
+\section{Анализ сходимости}
+\label{ch:theory}
+
+Особенность Алгоритма SGEM в том, что суррогат $u^{(t)}$, используемый на
+E- и M-шагах, сам обновляется между итерациями, поэтому классический
+аргумент монотонности EM~\cite{dempster1977em, wu1983convergence}
+напрямую неприменим. Покажем, что при достаточно быстром убывании ошибки
+суррогата SGEM сходится в том же смысле, что и обобщённый EM.
+
+Пусть $u_{\mathrm{true}}$ --- неизвестная истинная ошибка эксперта
+(пообъектная кросс-энтропия архитектуры $\boldsymbol{\alpha}$, обученной
+на подмножестве $\mathbf{r}$). Определим пошаговую ошибку суррогата в
+шкале потерь
+\begin{equation}
+\label{eq:eps_t}
+\varepsilon_t \;=\; \sup_{\boldsymbol{\alpha} \in \mathcal{A}, \;
+\mathbf{r} \in [0, 1]^M}
+\bigl|u^{(t)}(\boldsymbol{\alpha}, \mathbf{r})
+- u_{\mathrm{true}}(\boldsymbol{\alpha}, \mathbf{r})\bigr|.
+\end{equation}
+Параметр $\theta = (\boldsymbol{\alpha}_{1:K}, \mathbf{R})$ лежит в
+компактном множестве $\Theta = \mathcal{A}^K \times (\Delta_K)^M$;
+обозначим $N = \sum_m |\mathcal{C}_m|$. Истинное (взвешенное по размерам
+кластеров) лог-правдоподобие есть
+\begin{equation}
+\label{eq:Ltrue}
+L_{\mathrm{true}}(\theta) \;=\; \sum_{m=1}^M |\mathcal{C}_m|\,\log
+\sum_{k=1}^K r_{mk}\, e^{-u_{\mathrm{true}}(\boldsymbol{\alpha}_k, \mathbf{r}_k)},
+\end{equation}
+а истинная $Q$-функция ---
+\begin{equation}
+\label{eq:Qtrue}
+Q_{\mathrm{true}}(\theta; \theta') \;=\; \sum_{m=1}^M |\mathcal{C}_m|
+\sum_{k=1}^K w_{mk}(\theta')
+\bigl[\log r_{mk} - u_{\mathrm{true}}(\boldsymbol{\alpha}_k, \mathbf{r}_k)\bigr],
+\end{equation}
+где $w_{mk}(\theta')$ --- ответственности, вычисленные при
+$u_{\mathrm{true}}$. Введём вариационную свободную энергию,
+параметризованную функцией потерь $u$:
+\[
+\mathcal{F}_u(q, \theta) \;=\; \sum_{m=1}^{M} |\mathcal{C}_m|
+\sum_{k=1}^{K} q_{mk}\, \log \frac{r_{mk}\, e^{-u(\boldsymbol{\alpha}_k, \mathbf{r}_k)}}{q_{mk}},
+\qquad L_u(\theta) = \max_q \mathcal{F}_u(q, \theta).
+\]
+
+\begin{assumption}
+\label{ass:bounded}
+Существует $U_{\max} < \infty$ такое, что
+$0 \leq u_{\mathrm{true}}, u^{(t)} \leq U_{\max}$ для всех
+$\boldsymbol{\alpha}, \mathbf{r}, t$.
+\end{assumption}
+
+\begin{assumption}
+\label{ass:summable}
+Ошибки суррогата суммируемы:
+$\sum_{t=0}^{\infty} \varepsilon_t < \infty$.
+\end{assumption}
+
+\begin{assumption}
+\label{ass:gem}
+M-шаг обобщён, т.е. для каждого $t$ возвращается $\theta^{(t+1)}$ с
+$\mathcal{F}_{u^{(t)}}(q^{(t)}, \theta^{(t+1)})
+\geq \mathcal{F}_{u^{(t)}}(q^{(t)}, \theta^{(t)})$.
+\end{assumption}
+
+\begin{assumption}
+\label{ass:cont}
+Для каждого $\boldsymbol{\alpha}$ отображение
+$\mathbf{r}\mapsto u_{\mathrm{true}}(\boldsymbol{\alpha}, \mathbf{r})$
+непрерывно на $[0,1]^M$.
+\end{assumption}
+
+\begin{theorem}[Сходимость SGEM с адаптивным суррогатом]
+\label{thm:sgem}
+При выполнении Предположений~\ref{ass:bounded}--\ref{ass:cont}
+последовательность $\{\theta^{(t)}\}$, порождаемая Алгоритмом SGEM,
+удовлетворяет:
+\begin{enumerate}
+\item[\textup{(a)}] последовательность
+$\{L_{\mathrm{true}}(\theta^{(t)})\}$ сходится;
+\item[\textup{(b)}] всякая предельная точка $\theta^{\star}$ является
+стационарной точкой $L_{\mathrm{true}}$ на $\Theta$ в смысле
+$Q_{\mathrm{true}}(\theta;\theta^{\star}) \leq
+Q_{\mathrm{true}}(\theta^{\star};\theta^{\star})$ для всех
+$\theta\in\Theta$.
+\end{enumerate}
+\end{theorem}
+
+\begin{proof}[Схема доказательства]
+Ключевые шаги следующие. Из вариационного представления
+$L_u(\theta) = \max_q \mathcal{F}_u(q, \theta)$ с максимумом в точке
+$q^{\star}_{mk} \propto r_{mk} e^{-u(\boldsymbol{\alpha}_k, \mathbf{r}_k)}$
+следует равномерная оценка отклонения:
+$|\mathcal{F}_{u_{\mathrm{true}}}(q,\theta) - \mathcal{F}_{u^{(t)}}(q,\theta)|
+\leq N\varepsilon_t$ и, как следствие,
+$|L_{\mathrm{true}}(\theta) - L^{(t)}(\theta)| \leq N\varepsilon_t$.
+Объединяя это с Предположением~\ref{ass:gem} (подъём свободной энергии на
+M-шаге) и равенством на E-шаге, получаем
+\emph{квазимонотонность}
+\begin{equation}
+\label{eq:quasi-mono}
+L_{\mathrm{true}}(\theta^{(t+1)}) \;\geq\;
+L_{\mathrm{true}}(\theta^{(t)}) \;-\; 2N\,\varepsilon_t.
+\end{equation}
+Положив $V_t = L_{\max} - L_{\mathrm{true}}(\theta^{(t)}) \geq 0$
+(величина $L_{\max} = \sup_\theta L_{\mathrm{true}}$ конечна ввиду
+компактности $\Theta$), из~\eqref{eq:quasi-mono} имеем
+$V_{t+1} \leq V_t + 2N\varepsilon_t$ при
+$\sum_t 2N\varepsilon_t < \infty$. По теореме Роббинса--Зигмунда
+\cite{robbins1971convergence} последовательность $\{V_t\}$ сходится, что
+доказывает~(a). Для~(b) используется устойчивость softmax-ответственностей
+к возмущению суррогата: при $\varepsilon_t \to 0$ ответственности и
+$Q$-функция, вычисленные при $u^{(t)}$, сходятся к истинным; если бы
+предельная точка не была стационарной, нашёлся бы $\theta'$ с
+$Q_{\mathrm{true}}(\theta';\theta^{\star}) -
+Q_{\mathrm{true}}(\theta^{\star};\theta^{\star}) = \delta > 0$, что по
+переходу через $\tilde Q^{(t)}$ и подъёму на M-шаге дало бы прирост
+$\Delta_t \geq \delta/8$ для бесконечного числа $t$, противоречащий
+суммируемости из~(a). Следовательно, $\theta^{\star}$ стационарна.
+\end{proof}
+
+Побочным следствием доказательства пункта~(a) является явная оценка
+скорости
+\[
+L_{\mathrm{true}}(\theta^{\star}) - L_{\mathrm{true}}(\theta^{(T)})
+\;\leq\; 2N \sum_{t = T}^{\infty} \varepsilon_t.
+\]
+Если $\varepsilon_t = O(t^{-p})$ при $p > 1$, то
+$L_{\mathrm{true}}(\theta^{(T)}) \to L_{\mathrm{true}}(\theta^{\star})$
+со скоростью $O(T^{1 - p})$, что согласуется со скоростями,
+наблюдаемыми в анализе стохастического EM~\cite{cappe2009online}.
+
+\begin{remark}
+Предположение суммируемости~\ref{ass:summable} --- суррогатный аналог
+условия убывающего шага в стохастическом EM; ослабление его до
+$\varepsilon_t \to 0$ сохраняет пункт~(b), но не пункт~(a). На практике
+суммируемость достигается, когда шаг активного обучения обеспечивает
+достаточно полное покрытие пространства
+$\mathcal{A}\times[0,1]^M$.
+\end{remark}
+
+\textbf{Новизна и связь с классическими результатами о сходимости.}
+Классическая теория сходимости EM и его обобщённого варианта
+\cite{dempster1977em, wu1983convergence} опирается на монотонный подъём
+единого \emph{фиксированного} правдоподобия: каждый M-шаг не уменьшает
+одну и ту же целевую функцию, и сходимость следует из монотонной
+ограниченной последовательности. В нашей постановке эта предпосылка
+нарушена. Поскольку качество эксперта берётся с адаптивно
+переобучаемого суррогата $u^{(t)}$, а не из точного обучения,
+оптимизируемая на итерации $t$ цель сама является «движущейся мишенью»,
+а истинное правдоподобие $L_{\mathrm{true}}$, которое нас в итоге
+интересует, алгоритмом \emph{никогда} не вычисляется. Поэтому точная
+монотонность недоступна, и стандартный аргумент неприменим.
+
+Теорема~\ref{thm:sgem} показывает, что сходимость тем не менее
+сохраняется, --- в этом состоит основной теоретический вклад. Механизм
+--- \emph{квази}-монотонность
+$L_{\mathrm{true}}(\theta^{(t+1)}) \geq L_{\mathrm{true}}(\theta^{(t)}) - 2N\varepsilon_t$:
+истинное правдоподобие может проседать, но лишь на величину,
+пропорциональную пошаговой ошибке суррогата $\varepsilon_t$.
+Суммируемость этих ошибок превращает
+$\{L_{\mathrm{true}}(\theta^{(t)})\}$ в почти-супермартингал, и аргумент
+Роббинса--Зигмунда~\cite{robbins1971convergence} даёт и сходимость, и
+стационарность всякой предельной точки \emph{истинной} цели --- хотя
+каждый E- и M-шаг видит только суррогат.
+
+Это отличается от анализа стохастического и онлайн-EM
+\cite{cappe2009online}, где возмущение точного шага EM ---
+\emph{нулевое в среднем стохастическое} (от Монте-Карло E-шага),
+гасимое убывающим шагом. В нашем случае возмущение --- наоборот,
+\emph{детерминированная ограниченная ошибка аппроксимации} обученного
+суррогата, а роль убывающего шага играет условие
+суммируемости~\ref{ass:summable}, малость которого обеспечивается не
+усреднением шума, а покрытием пространства поиска при активном обучении.
+Насколько нам известно, это первая гарантия сходимости для EM-подобной
+процедуры архитектурного поиска, чья пошаговая цель задаётся
+\emph{адаптивно обучаемой} суррогатной моделью.

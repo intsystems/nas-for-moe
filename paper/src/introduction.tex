@@ -44,6 +44,8 @@ In this study, we aim to address this question by examining how models evolve du
 \vspace{2mm}
 
 \begin{itemize}
-    \item \textbf{SA-NAS framework:} We propose a Structure-Aware Neural Architecture Search (SA-NAS) framework that optimizes expert architectures with respect to the clustering structure of the data.
-    \item \textbf{Theoretical understanding:} We provide a theoretical foundation for our method, demonstrating how the data’s clustering structure influences the final architectures identified by the search algorithm.
+    \item \textbf{Problem formulation.} We propose a new formulation of architecture search for Mixture-of-Experts models as a cluster-aware likelihood-maximisation problem, and give a theoretical grounding for it by showing its equivalence to the incomplete-data maximum likelihood of a latent-variable mixture.
+    \item \textbf{Algorithm.} We propose an algorithm that solves the stated problem, based on the Expectation--Maximisation (EM) algorithm with an adaptively refined surrogate model.
+    \item \textbf{Convergence guarantee.} We prove a convergence theorem for the proposed algorithm.
+    \item \textbf{Benchmarks and experiments.} We construct datasets on which mixture-of-experts approaches have a clear advantage, and conduct comparative experiments against several baselines on them.
 \end{itemize}

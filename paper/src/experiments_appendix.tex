@@ -1,0 +1,101 @@
+\section{Additional Experimental Results}
+\label{app:experiments}
+
+This appendix collects two ablations on the CIFAR-100/SVHN mixture
+($K=2$, $M=30$ semantic clusters) referenced from
+Section~\ref{subsec:cifar}. All numbers are cluster-gate test accuracy
+(mean $\pm$ std over the indicated number of seeds), evaluated under the
+same protocol as Table~\ref{tab:cifar_main}.
+
+\subsection{Decomposition of the cluster-gate accuracy}
+\label{app:decomp}
+
+To attribute the MoE gain to its two ingredients --- the cluster$\to$expert
+\emph{routing} and the per-expert \emph{architecture} --- we vary one
+factor at a time (Table~\ref{tab:decomp}). Block~(i) fixes a single
+DARTS architecture (searched on the full mixture) and only changes the
+routing: moving from a random cluster split to the oracle source split
+raises accuracy by $3.0$ percentage points, so the routing is the main
+lever. Block~(ii) fixes the oracle routing and instead changes the
+architecture: a single full-mix architecture, a CIFAR-searched one and an
+SVHN-searched one all lie within $1$~p.p.\ of each other, i.e.\ once the
+routing is correct, architectural heterogeneity between experts adds
+little on this benchmark. Block~(iii) isolates the contribution of
+\emph{learning} the routing inside SGEM: freezing the routing matrix at
+its random initialisation (no M-step on $\mathbf{R}$) drops the
+source-recovery rate to chance ($59\%$) and the accuracy to $0.598$,
+whereas the full method recovers the source partition ($92\%$) and
+reaches $0.620$ --- essentially the value obtained with the oracle
+routing in block~(i), but \emph{without} any source labels.
+
+\begin{table}[h]
+\centering
+\caption{Ablation decomposing the cluster-gate accuracy. ``src.\ match''
+is the agreement of the hard routing with the ground-truth source
+partition; it is $100\%$ by construction whenever the oracle split is
+used.}
+\label{tab:decomp}
+\begin{tabular}{lcc}
+\toprule
+Setting & test acc. & src.\ match \\
+\midrule
+\multicolumn{3}{l}{\textit{(i) vary routing, architecture fixed (full-mix DARTS)}} \\
+\quad random cluster split & $0.587 \pm 0.006$ & $\approx 54\%$ \\
+\quad oracle source split & $0.617 \pm 0.007$ & $100\%$ \\
+\midrule
+\multicolumn{3}{l}{\textit{(ii) vary architecture, oracle routing}} \\
+\quad full-mix architecture & $0.627 \pm 0.009$ & $100\%$ \\
+\quad CIFAR-searched architecture & $0.636 \pm 0.003$ & $100\%$ \\
+\quad SVHN-searched architecture & $0.626 \pm 0.006$ & $100\%$ \\
+\midrule
+\multicolumn{3}{l}{\textit{(iii) learn the routing (SGEM, no labels)}} \\
+\quad routing frozen at random init & $0.598 \pm 0.003$ & $59 \pm 7\%$ \\
+\quad \textbf{SGEM (full)} & $\mathbf{0.620 \pm 0.009}$ & $\mathbf{92 \pm 2\%}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Sensitivity to the load-balancing weight}
+\label{app:lambda}
+
+Section~\ref{subsec:cifar} keeps the load-balancing weight small
+($\lambda_{\text{LB}}=1$) because the correct source partition is itself
+imbalanced ($19/11$), so a strong balancing penalty would push the
+routing away from it. We make this trade-off quantitative by scoring three
+candidate hard routings under the \emph{penalised} objective
+$L - \lambda_{\text{LB}}\cdot\mathrm{LB}_N$ actually optimised in the
+M-step, where the per-expert losses $u_k$ are obtained by genuinely
+training a fixed architecture on each expert's clusters (no surrogate),
+$L = -\sum_k N_k u_k$ is the resulting size-weighted objective, and
+$\mathrm{LB}_N = K\sum_k P_k^2\cdot N$ is the (extensive) balancing
+penalty (Table~\ref{tab:lambda}).
+
+\begin{table}[h]
+\centering
+\caption{Penalised objective of three hard routings on real-trained
+per-expert losses. The penalised score is
+$L - \lambda_{\text{LB}}\,\mathrm{LB}_N$.}
+\label{tab:lambda}
+\begin{tabular}{lccc}
+\toprule
+hard split & $u_k$ (per expert) & $L$ & $\mathrm{LB}_N$ \\
+\midrule
+oracle $[19, 11]$ & $[2.73,\ 0.51]$ & $-48099$ & $31491$ \\
+balanced, SGEM $[15, 15]$ & $[1.91,\ 1.90]$ & $-55973$ & $29400$ \\
+balanced, random $[15, 15]$ & $[1.77,\ 2.15]$ & $-57726$ & $29400$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+On the unpenalised objective ($\lambda_{\text{LB}}=0$) the oracle split is
+preferred by a margin of $\Delta L = 7874$. However, because the oracle
+split is imbalanced it is penalised more heavily than a balanced one by
+$\Delta\,\mathrm{LB}_N = 2091$ per unit of $\lambda_{\text{LB}}$. The
+oracle split therefore wins the penalised objective only while
+$\lambda_{\text{LB}} < \Delta L / \Delta\,\mathrm{LB}_N \approx 3.77$;
+beyond this cross-over a balanced (and hence domain-blind) split scores
+higher. This is a direct, surrogate-free conflict between load balancing
+and the imbalanced domain structure, and explains why a large
+$\lambda_{\text{LB}}$ --- which reliably prevents collapse --- would also
+suppress the very specialisation we seek; we therefore operate well below
+the cross-over.

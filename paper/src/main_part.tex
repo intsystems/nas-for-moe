@@ -186,6 +186,11 @@ $u$ is non-differentiable in $\boldsymbol{\alpha}$, we sample candidate
 architectures from the search space and keep, for each expert $k$, the
 candidate with the lowest $u(\boldsymbol{\alpha}_k, \mathbf{r}_k)$.
 
+The complete procedure --- alternating the E-step, the two M-steps over
+the routing $\mathbf{R}$ and the architectures $\boldsymbol{\alpha}_{1:K}$,
+and an active-learning refit of the surrogate over $T$ iterations --- is
+summarised in Algorithm~\ref{alg:sgem}.
+
 \begin{algorithm}[h]
 \caption{Surrogate-assisted Generalized EM (SGEM) for MoE Architecture Search}
 \label{alg:sgem}
@@ -316,3 +321,40 @@ not part~(a). Practically, summability is achieved whenever the
 active learning step in Algorithm~\ref{alg:sgem} provides
 sufficiently rich coverage of $\mathcal{A}\times[0,1]^M$.
 \end{remark}
+
+\textbf{Novelty and relation to classical convergence results.} The
+classical convergence theory of EM and its generalised
+variant~\cite{dempster1977em, wu1983convergence} rests on the monotone
+ascent of a single, \emph{fixed} likelihood: every M-step cannot
+decrease the same objective, so convergence follows from a
+monotone--bounded sequence. Our setting violates this premise. Because
+the quality of an expert is read off an adaptively re-fitted surrogate
+$u^{(t)}$ rather than from exact training, the objective optimised at
+iteration $t$ is itself a moving target, and the true likelihood
+$L_{\mathrm{true}}$ we ultimately care about is \emph{never} evaluated by
+the algorithm. Hence no exact monotonicity is available and the standard
+argument does not apply.
+
+Theorem~\ref{thm:sgem} shows that convergence is retained nonetheless,
+which is the main theoretical contribution. The mechanism is a
+\emph{quasi}-monotonicity bound
+$L_{\mathrm{true}}(\theta^{(t+1)}) \geq L_{\mathrm{true}}(\theta^{(t)}) - 2N\varepsilon_t$:
+the true likelihood may dip, but only by a slack proportional to the
+per-iteration surrogate error $\varepsilon_t$. Summability of these
+errors turns $\{L_{\mathrm{true}}(\theta^{(t)})\}$ into an
+almost-supermartingale, and a Robbins--Siegmund
+argument~\cite{robbins1971convergence} yields both convergence and
+stationarity of every limit point of the \emph{true} objective --- even
+though each E- and M-step sees only the surrogate.
+
+This contrasts with stochastic and online EM analyses
+\cite{cappe2009online}, where the perturbation of the exact EM update is
+\emph{zero-mean stochastic noise} (from Monte-Carlo E-steps) tamed by a
+diminishing step-size schedule. In our case the perturbation is instead
+a \emph{deterministic, bounded approximation error} of a learned
+surrogate, and the role of the vanishing step size is played by the
+summability condition~\ref{ass:summable}, whose smallness is secured not
+by averaging out noise but by the active-learning coverage of the
+search space. To our knowledge, this is the first convergence guarantee
+for an EM-type architecture-search procedure whose per-iteration
+objective is supplied by an \emph{adaptively trained} surrogate model.

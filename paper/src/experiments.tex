@@ -18,9 +18,26 @@ training/validation and clustered into $M = 20$ KMeans clusters,
 yielding the partition described in our data preparation pipeline.
 We use $K = 2$ experts so that the ideal solution is unambiguous: one
 expert should specialise to the linear cloud and the other to the
-ring cloud. The search space is the cell-based DARTS-style space of
-\cite{liu2018darts}, restricted to small operations suitable for 2D
-inputs.
+ring cloud. The search space is a small cell-based space over the
+$2$D inputs, in the spirit of \cite{liu2018darts}, whose operation set
+is deliberately chosen so that the two clouds genuinely prefer
+\emph{different} architectures. In particular it contains a
+\emph{linear} operation --- a linear map
+$\boldsymbol{x}\mapsto W\boldsymbol{x}$ that already suffices to
+separate the linearly-separable cloud, whose two classes are split by a
+straight diagonal --- and a \emph{radial basis function} (RBF)
+operation
+$\boldsymbol{x}\mapsto \exp\!\bigl(-\gamma\,\lVert\boldsymbol{x}-\boldsymbol{c}\rVert^2\bigr)$,
+which encodes the distance to a centre $\boldsymbol{c}$ and is naturally
+suited to the ring cloud, whose two classes (the inner and the outer
+ring) are separated by radius rather than by any hyperplane. A few
+auxiliary operations (identity, element-wise squaring, additive shift,
+$\mathrm{ReLU}$ and dropout) complete the set. Since a purely linear
+architecture cannot model the concentric rings, while an RBF-dominated
+one is needlessly poor on the linear cloud, the optimal mixture is
+forced to assign \emph{architecturally distinct} experts to the two
+regions; the toy task therefore probes architectural specialisation,
+not merely the routing.
 
 With the parameters reported in our experimental log, SGEM
 (Algorithm~\ref{alg:sgem}) recovers the \emph{ideal} cluster split
@@ -134,6 +151,10 @@ correct source partition is itself imbalanced ($19/11$), an aggressive
 penalty would push the routing \emph{away} from it; we therefore keep
 $\lambda_{\text{LB}}$ small ($\lambda_{\text{LB}} = 1$) and prevent
 collapse instead through the data-collection scheme described below.
+Appendix~\ref{app:lambda} makes this trade-off quantitative, locating
+the cross-over at $\lambda_{\text{LB}} \approx 3.77$ beyond which a
+balanced --- and hence domain-blind --- split already scores higher on
+the penalised objective.
 
 We compare against the following methods, all evaluated with the same
 cluster gate:
@@ -200,7 +221,13 @@ that is \emph{given} the true source split. The cluster gate is what
 isolates routing quality: under a learnable gate the methods become
 nearly indistinguishable (all $\approx\!0.63$), because a trainable gate
 can compensate for a suboptimal partition and so masks the benefit of a
-good one.
+good one. A finer ablation that decomposes this accuracy into a routing
+and an architecture contribution is reported in
+Appendix~\ref{app:decomp}: the gain stems almost entirely from the
+cluster$\to$expert routing, while architectural heterogeneity between
+experts adds little once the routing is correct, and learning the
+routing inside SGEM (rather than freezing it) is what recovers the
+source structure.
 
 \begin{table}[h]
 \centering
@@ -237,3 +264,25 @@ negative finding; the small residual gap to the oracle stems from a few
 genuinely mixed clusters and from objective noise near the optimum (the
 best-objective iterate occasionally misses the $30/30$ split attained one
 iteration earlier).
+
+\textbf{Convergence.} Figure~\ref{fig:convergence} traces a single SGEM
+run across its EM iterations. The size-weighted objective $L^{(t)}$
+increases up to optimisation noise, while the source-recovery rate climbs
+from $67\%$ to $100\%$, empirically illustrating the convergence
+guaranteed by Theorem~\ref{thm:sgem}. The two curves peak one iteration
+apart --- the objective at $t = 8$, the recovery at $t = 9$ --- the same
+objective/quality mismatch near the optimum noted above, so selecting the
+iterate by best objective returns a near-ideal but not always perfect
+split.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.62\textwidth]{convergence_curve}
+    \caption{Convergence of SGEM on the CIFAR-100/SVHN mixture
+    (seed $322$). Left axis (blue): agreement of the hard routing with
+    the ground-truth source partition; the dashed line marks the
+    $54\%$ random-split level. Right axis (red): the size-weighted
+    objective $L^{(t)}$. Both rise over the EM iterations, the
+    source-recovery rate reaching $100\%$ at $t = 9$.}
+    \label{fig:convergence}
+\end{figure}

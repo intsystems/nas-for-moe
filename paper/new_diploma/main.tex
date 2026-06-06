@@ -1,0 +1,36 @@
+\documentclass[a4paper,14pt]{extreport}
+\input{common/packages}  % Пакеты общие для диссертации и автореферата
+\input{Dissertation/dispackages}         % Пакеты для диссертации
+\input{Dissertation/userpackages}        % Пакеты для специфических пользовательских задач
+
+\input{Dissertation/setup}               % Упрощённые настройки шаблона
+
+\input{common/data}      % Основные сведения
+\input{common/styles}    % Стили общие для диссертации и автореферата
+\input{Dissertation/disstyles}           % Стили для диссертации
+\input{Dissertation/userstyles}          % Стили для специфических пользовательских задач
+\input{biblio/predefined}
+
+\begin{document}
+
+\input{common/renames}                   % Переопределение именований
+\input{common/macros} 
+
+
+
+\include{Dissertation/0_title}
+\tableofcontents
+\include{Dissertation/2_introduction}
+\include{Dissertation/3_problem_statement}
+\include{Dissertation/4_method}
+\include{Dissertation/6_computational_experiments}
+\include{Dissertation/7_conclusion}
+\include{Dissertation/8_references}      % Список литературы
+% \include{Dissertation/lists}           % Списки таблиц и изображений (иллюстративный материал)
+
+\appendix
+\renewcommand{\thechapter}{\Asbuk{chapter}}   % Приложения нумеруются кириллицей (А, Б, ...)
+\include{Dissertation/9_appendix}
+\include{Dissertation/10_appendix_experiments}
+
+\end{document}

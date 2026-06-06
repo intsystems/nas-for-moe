@@ -1,0 +1,259 @@
+\chapter{Доказательство теоремы о сходимости}
+\label{app:proof}
+
+В приложении приведены вспомогательные леммы и полное доказательство
+Теоремы~\ref{thm:sgem}. Используются обозначения
+раздела~\ref{ch:theory}: $\theta = (\boldsymbol{\alpha}_{1:K}, \mathbf{R})
+\in \Theta = \mathcal{A}^K \times (\Delta_K)^M$ при конечном
+$\mathcal{A}$, $\varepsilon_t$ --- пошаговая ошибка суррогата (в шкале
+потерь, см.~\eqref{eq:eps_t}), $N = \sum_m |\mathcal{C}_m|$, а
+вариационная свободная энергия, параметризованная функцией потерь $u$,
+есть
+\[
+\mathcal{F}_u(q, \theta) \;=\; \sum_{m=1}^{M} |\mathcal{C}_m|
+\sum_{k=1}^{K} q_{mk}\, \log \frac{r_{mk}\, e^{-u(\boldsymbol{\alpha}_k, \mathbf{r}_k)}}{q_{mk}}.
+\]
+Обозначим $L_u(\theta) = \max_q \mathcal{F}_u(q, \theta)$ ---
+взвешенное по размерам лог-правдоподобие, порождённое потерей $u$, и
+сократим $L_{\mathrm{true}} = L_{u_{\mathrm{true}}}$,
+$L^{(t)} = L_{u^{(t)}}$.
+
+\section{Вспомогательные леммы}
+\label{app:lemmas}
+
+\begin{proposition}[Максимизация ELBO]
+\label{app:prop-elbo}
+Для всякой функции потерь
+$u: \mathcal{A} \times [0, 1]^M \to \mathbb{R}_{\geq 0}$ и всякого
+$\theta\in\Theta$ выполнено
+$L_u(\theta) = \max_{q} \mathcal{F}_u(q, \theta)$, причём максимум
+достигается в
+\[
+q^{\star}_{mk}(\theta) \;=\; \frac{r_{mk}\,e^{-u(\boldsymbol{\alpha}_k, \mathbf{r}_k)}}
+{\sum_{j} r_{mj}\,e^{-u(\boldsymbol{\alpha}_j, \mathbf{r}_j)}}.
+\]
+\end{proposition}
+
+\begin{proof}
+Зафиксируем $\theta$ и $m$. Множитель $|\mathcal{C}_m|$ положителен и
+выносится из внутренней максимизации по $q_{m,:}$, не влияя на оптимум.
+Обозначив $a_{mk} = r_{mk}\, e^{-u(\boldsymbol{\alpha}_k, \mathbf{r}_k)}$
+и используя $\sum_k q_{mk} = 1$, внутреннее выражение равно
+$-\mathrm{KL}(q_{m,:} \,\|\, a_{m,:}/\!\sum_j a_{mj}) + \log\sum_j a_{mj}$.
+KL-дивергенция неотрицательна и обращается в нуль в точности при
+$q_{mk} = a_{mk}/\sum_j a_{mj}$, что даёт утверждение. Суммирование по
+$m$ с весами $|\mathcal{C}_m|$ восстанавливает
+$L_u(\theta) = \sum_m |\mathcal{C}_m|\,\log\sum_k a_{mk}$.
+\end{proof}
+
+Следствием является разложение Нила--Хинтона
+$L_u(\theta) = \mathcal{F}_u(q, \theta) + \sum_m |\mathcal{C}_m|\,
+\mathrm{KL}(q_{m,:}\|q^{\star}_{m,:}(\theta))$, откуда
+$L_u(\theta) \geq \mathcal{F}_u(q,\theta)$ с равенством тогда и только
+тогда, когда $q = q^{\star}(\theta)$.
+
+\begin{lemma}[Равномерное отклонение ELBO]
+\label{app:lem-elbo}
+При Предположении~\ref{ass:bounded} для всех $q$, $\theta$, $t$
+выполнено
+$|\mathcal{F}_{u_{\mathrm{true}}}(q,\theta) - \mathcal{F}_{u^{(t)}}(q,\theta)|
+\leq N\,\varepsilon_t$.
+\end{lemma}
+
+\begin{proof}
+Слагаемые $\log r_{mk}$ и $-\log q_{mk}$ сокращаются между двумя
+ELBO, оставляя
+$\mathcal{F}_{u_{\mathrm{true}}} - \mathcal{F}_{u^{(t)}}
+= \sum_m |\mathcal{C}_m| \sum_k q_{mk}
+[u^{(t)}(\boldsymbol{\alpha}_k, \mathbf{r}_k) - u_{\mathrm{true}}(\boldsymbol{\alpha}_k, \mathbf{r}_k)]$.
+Оценивая скобку через $\varepsilon_t$ и используя $\sum_k q_{mk} = 1$,
+получаем
+$|\mathcal{F}_{u_{\mathrm{true}}} - \mathcal{F}_{u^{(t)}}|
+\leq \varepsilon_t \sum_m |\mathcal{C}_m| = N\,\varepsilon_t$.
+\end{proof}
+
+\begin{corollary}
+\label{app:cor-lik}
+Для всякого $\theta$ выполнено
+$|L_{\mathrm{true}}(\theta) - L^{(t)}(\theta)| \leq N\,\varepsilon_t$.
+\end{corollary}
+
+\begin{proof}
+Применяя Лемму~\ref{app:lem-elbo} к максимумам двух ELBO и используя
+$|\max_q f - \max_q g| \leq \sup_q |f - g|$.
+\end{proof}
+
+Для анализа предельных точек потребуются ещё три оценки --- на
+softmax-отображение, на ответственности и на $Q$-функцию.
+
+\begin{lemma}[Устойчивость softmax]
+\label{app:lem-softmax}
+Пусть $a_k, \tilde a_k > 0$ удовлетворяют
+$e^{-\varepsilon} a_k \leq \tilde a_k \leq e^{\varepsilon} a_k$. Тогда
+нормированные векторы $p_k = a_k/\sum_j a_j$ и
+$\tilde p_k = \tilde a_k/\sum_j \tilde a_j$ удовлетворяют
+$|\tilde p_k - p_k| \leq (e^{2\varepsilon} - 1)\,p_k \leq 3\varepsilon\,p_k$
+при $\varepsilon \leq 1$.
+\end{lemma}
+
+\begin{proof}
+$\tilde p_k \leq a_k e^{\varepsilon}/\sum_j a_j e^{-\varepsilon}
+= p_k\,e^{2\varepsilon}$ и аналогично
+$\tilde p_k \geq p_k\,e^{-2\varepsilon}$.
+\end{proof}
+
+\begin{lemma}[Отклонение ответственностей]
+\label{app:lem-resp}
+Пусть $w_{mk}(\theta) = q^{\star}_{mk}(\theta)$ ---
+ответственности при истинном суррогате
+(Утверждение~\ref{app:prop-elbo} при $u = u_{\mathrm{true}}$), а
+$q^{(t)}_{mk}$ --- ответственности E-шага на итерации $t$. При
+$\varepsilon_t \leq 1$ выполнено
+$|q^{(t)}_{mk} - w_{mk}(\theta^{(t)})| \leq 3\varepsilon_t\, w_{mk}(\theta^{(t)})$.
+\end{lemma}
+
+\begin{proof}
+Применяем Лемму~\ref{app:lem-softmax} с
+$a_{mk} = r^{(t)}_{mk}\,e^{-u_{\mathrm{true}}(\boldsymbol{\alpha}^{(t)}_k, \mathbf{r}^{(t)}_k)}$
+и $\tilde a_{mk}$, полученным заменой $u_{\mathrm{true}}$ на $u^{(t)}$.
+Отношение $\tilde a_{mk}/a_{mk} = e^{u_{\mathrm{true}} - u^{(t)}}$
+удовлетворяет
+$e^{-\varepsilon_t} \leq \tilde a_{mk}/a_{mk} \leq e^{\varepsilon_t}$
+ввиду~\eqref{eq:eps_t}, так что лемма применима при
+$\varepsilon = \varepsilon_t$.
+\end{proof}
+
+\begin{lemma}[Отклонение $Q$-функции]
+\label{app:lem-qdev}
+Определим суррогатную $Q$-функцию
+$\tilde Q^{(t)}(\theta;\theta') = \sum_{m} |\mathcal{C}_m|
+\sum_{k} q^{(t)}_{mk}(\theta')[\log r_{mk} - u^{(t)}(\boldsymbol{\alpha}_k, \mathbf{r}_k)]$.
+При Предположении~\ref{ass:bounded} существует постоянная
+$C_Q = C_Q(N, K, U_{\max})$ такая, что для всех $\theta, \theta'$ и
+всех $t$ с $\varepsilon_t \leq 1$ выполнено
+$|\tilde Q^{(t)}(\theta;\theta') - Q_{\mathrm{true}}(\theta;\theta')|
+\leq C_Q\,\varepsilon_t$.
+\end{lemma}
+
+\begin{proof}
+Прибавим и вычтем
+$\sum_m |\mathcal{C}_m| \sum_k q^{(t)}_{mk}[\log r_{mk} - u_{\mathrm{true}}(\boldsymbol{\alpha}_k, \mathbf{r}_k)]$.
+Первая часть (член ошибки суррогата) есть
+$\sum_m |\mathcal{C}_m| \sum_k q^{(t)}_{mk}(u_{\mathrm{true}} - u^{(t)})$
+и ограничена $N\varepsilon_t$. Остаток распадается на
+$\sum_m |\mathcal{C}_m| \sum_k (q^{(t)}_{mk} - w_{mk})(-u_{\mathrm{true}})$
+и
+$\sum_m |\mathcal{C}_m| \sum_k (q^{(t)}_{mk} - w_{mk})\log r_{mk}$.
+Первое ограничено $3NK\,U_{\max}\,\varepsilon_t$ по
+Лемме~\ref{app:lem-resp} (так как $|u_{\mathrm{true}}| \leq U_{\max}$).
+Для второго, используя $|x\log x|\leq 1/e$ на $[0,1]$ вместе с оценкой
+устойчивости softmax (Лемма~\ref{app:lem-softmax}), получаем оценку
+$3N\varepsilon_t/e$. Суммируя три вклада, приходим к утверждению с
+$C_Q = N(1 + 3K\,U_{\max} + 3/e)$.
+\end{proof}
+
+\section{Основное доказательство}
+\label{app:mainproof}
+
+\begin{proposition}[Квазимонотонность $L_{\mathrm{true}}$]
+\label{app:prop-qm}
+При Предположениях~\ref{ass:bounded}--\ref{ass:gem} для всякого $t$
+выполнено
+\begin{equation}
+\label{eq:qm-app}
+L_{\mathrm{true}}(\theta^{(t+1)}) \;\geq\;
+L_{\mathrm{true}}(\theta^{(t)}) \;-\; 2N\,\varepsilon_t.
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+Свяжем пять неравенств. Во-первых,
+$L_{\mathrm{true}}(\theta^{(t+1)}) \geq
+\mathcal{F}_{u_{\mathrm{true}}}(q^{(t)}, \theta^{(t+1)})$, так как
+$L_u(\theta) = \max_q \mathcal{F}_u(q,\theta)$. Во-вторых, по
+Лемме~\ref{app:lem-elbo},
+$\mathcal{F}_{u_{\mathrm{true}}}(q^{(t)}, \theta^{(t+1)})
+\geq \mathcal{F}_{u^{(t)}}(q^{(t)}, \theta^{(t+1)}) - N\varepsilon_t$.
+В-третьих, обобщённый M-шаг (Предположение~\ref{ass:gem}) даёт
+$\mathcal{F}_{u^{(t)}}(q^{(t)}, \theta^{(t+1)})
+\geq \mathcal{F}_{u^{(t)}}(q^{(t)}, \theta^{(t)})$. В-четвёртых, E-шаг
+делает последнее равным $L^{(t)}(\theta^{(t)})$. В-пятых,
+Следствие~\ref{app:cor-lik} даёт
+$L^{(t)}(\theta^{(t)}) \geq L_{\mathrm{true}}(\theta^{(t)}) - N\varepsilon_t$.
+Объединяя пять шагов, получаем~\eqref{eq:qm-app}.
+\end{proof}
+
+\textbf{Часть (a): сходимость правдоподобия.} Положим
+$L_{\max} = \sup_{\theta\in\Theta} L_{\mathrm{true}}(\theta)$ (величина
+конечна ввиду компактности $\Theta$ --- Предположение~\ref{ass:cont} и
+конечность $\mathcal{A}$). Определим
+$V_t = L_{\max} - L_{\mathrm{true}}(\theta^{(t)}) \geq 0$. Из
+Утверждения~\ref{app:prop-qm} следует
+$V_{t+1} \leq V_t + 2N\varepsilon_t$, причём
+$\sum_{t} 2N\varepsilon_t < \infty$ по Предположению~\ref{ass:summable}.
+По теореме Роббинса--Зигмунда~\cite{robbins1971convergence} (с $a_t = 0$,
+$b_t = 2N\varepsilon_t$) последовательность $\{V_t\}$ сходится, а значит,
+сходится и $\{L_{\mathrm{true}}(\theta^{(t)})\}$. \qed
+
+\textbf{Часть (b): стационарность предельных точек.}
+
+\emph{Шаг 1: существование.} $\Theta$ компактно, поэтому у
+$\{\theta^{(t)}\}$ есть хотя бы одна предельная точка
+$\theta^{\star} = \lim_{j\to\infty} \theta^{(t_j)}$.
+
+\emph{Шаг 2: предположение от противного.} Пусть $\theta^{\star}$ не
+стационарна: найдутся $\theta'\in\Theta$ и $\delta > 0$ с
+$Q_{\mathrm{true}}(\theta';\theta^{\star}) -
+Q_{\mathrm{true}}(\theta^{\star};\theta^{\star}) = \delta > 0$.
+
+\emph{Шаг 3: непрерывность.} Отображение
+$\theta'\mapsto Q_{\mathrm{true}}(\theta;\theta')$ непрерывно на
+$\Theta$: $w_{mk}(\theta')$ непрерывно, так как $u_{\mathrm{true}}$
+непрерывно по $\mathbf{r}$ (Предположение~\ref{ass:cont}), а softmax
+непрерывен; произведение $w_{mk}\log r_{mk}$ непрерывно продолжается в
+$r_{mk} = 0$, так как $w_{mk} = O(r_{mk})$, а $r\mapsto r\log r$
+непрерывно в нуле. Поэтому при достаточно больших $j$
+$Q_{\mathrm{true}}(\theta';\theta^{(t_j)}) -
+Q_{\mathrm{true}}(\theta^{(t_j)};\theta^{(t_j)}) \geq \delta/2$.
+
+\emph{Шаг 4: переход к $\tilde Q$.} По Лемме~\ref{app:lem-qdev},
+$\tilde Q^{(t_j)}(\theta';\theta^{(t_j)}) -
+\tilde Q^{(t_j)}(\theta^{(t_j)};\theta^{(t_j)}) \geq
+\delta/2 - 2C_Q\,\varepsilon_{t_j} \geq \delta/4$
+при достаточно больших $j$, так как $\varepsilon_{t_j}\to 0$.
+
+\emph{Шаг 5: подъём на M-шаге.} Поскольку M-шаг перебирает множество
+кандидатов, содержащее $\theta'$ (ввиду конечности $\mathcal{A}$ и
+свойств замыкания обновления по $\mathbf{R}$),
+$\tilde Q^{(t_j)}(\theta^{(t_j+1)};\theta^{(t_j)}) \geq
+\tilde Q^{(t_j)}(\theta';\theta^{(t_j)})$. Переходя обратно через
+Лемму~\ref{app:lem-qdev}, получаем
+$\Delta_{t_j} := Q_{\mathrm{true}}(\theta^{(t_j+1)};\theta^{(t_j)}) -
+Q_{\mathrm{true}}(\theta^{(t_j)};\theta^{(t_j)}) \geq
+\delta/4 - 2C_Q\,\varepsilon_{t_j} \geq \delta/8$
+при достаточно больших $j$.
+
+\emph{Шаг 6: противоречие через суммируемость.} Неравенство Гиббса
+$L_{\mathrm{true}}(\theta^{(t+1)}) - L_{\mathrm{true}}(\theta^{(t)})
+\geq \Delta_t$ вместе с Утверждением~\ref{app:prop-qm} даёт
+$\Delta_t \geq -2N\varepsilon_t$. Тогда неотрицательная
+последовательность $\Delta_t + 2N\varepsilon_t$ удовлетворяет
+$\sum_t (\Delta_t + 2N\varepsilon_t) < \infty$ (Роббинс--Зигмунд для
+$V_t$), и потому $\sum_t \Delta_t < \infty$. Но Шаг 5 даёт
+$\Delta_{t_j} \geq \delta/8$ для бесконечного числа $j$, откуда
+$\sum_t \Delta_t = +\infty$ --- противоречие. Следовательно,
+$\theta^{\star}$ стационарна. \qed
+
+\section{Скорость сходимости}
+\label{app:rate}
+
+Побочным следствием доказательства части~(a) является явная оценка
+скорости
+\[
+L_{\mathrm{true}}(\theta^{\star}) - L_{\mathrm{true}}(\theta^{(T)})
+\;\leq\; 2N \sum_{t = T}^{\infty} \varepsilon_t.
+\]
+Если $\varepsilon_t = O(t^{-p})$ при $p > 1$, то
+$L_{\mathrm{true}}(\theta^{(T)}) \to L_{\mathrm{true}}(\theta^{\star})$
+со скоростью $O(T^{1 - p})$, что согласуется со скоростями анализа
+стохастического EM~\cite{cappe2009online}.
