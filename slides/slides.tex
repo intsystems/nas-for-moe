@@ -46,7 +46,7 @@
     \maketitle
     \vspace{-2.3cm}
     \centering
-    %\small Научный руководитель: к.ф.-м.н. Бахтеев Олег
+    \small Научный руководитель: к.ф.-м.н. Бахтеев Олег
 
     \vspace{0.6cm}
 
@@ -75,25 +75,6 @@
     \end{block}
 \end{frame}
 %----------------------------------------------------------------------------------------------------------
-\begin{frame}{Постановка задачи}
-    \begin{block}{Максимизация правдоподобия смеси экспертов}
-        \vspace{-8mm}
-        \begin{gather*}
-            \prod_{n=1}^{N} \sum_{k=1}^{K} p(y_n, n \in C_k \mid x_n, \alpha_k, \theta_k) \to \max_{\alpha_1, \dots, \alpha_K, \theta_1, \dots, \theta_K},
-        \end{gather*}
-        где $K$ -- кол-во экспертов, $N$ -- кол-во элементов данных. Для $k$-ого эксперта $C_k$ -- его индексы данных, $\theta_k$ -- параметры, $\alpha_k$ -- архитектура.
-    \end{block}
-
-    \begin{block}{Задача поиска архитектуры смеси из $K$ экспертов}
-    \vspace{-5mm}
-    \begin{gather*}
-        \prod_{n=1}^{N}\sum_{k=1}^{K} r_{nk}\, u(\alpha_k, R_k) \to \max_{\alpha_1,\ldots,\alpha_K,\, R_1,\ldots,R_K},
-    \end{gather*}
-    где $r_{nk}$ --- вероятность назначения элемента $n$ эксперту $k$, $R_k = \{r_{nk}\}_{n=1}^{N}$, $u(\alpha_k, R_k)$ --- суррогатная функция, оценивающая качество архитектуры $\alpha_k$ на данных $R_k$.
-    \end{block}
-
-\end{frame}
-%----------------------------------------------------------------------------------------------------------
 \begin{frame}{Схема работы}
     Архитектуры экспертов и кластеры данных подбираются для каждого кластера с помощью суррогатной модели $u$.
     \begin{figure}
@@ -106,13 +87,37 @@
 %----------------------------------------------------------------------------------------------------------
 \begin{frame}{Суррогатная модель для оценки качества экспертов}
 
-    Суррогатная функция $u(\alpha, R)$ предсказывает валидационную точность архитектуры $\alpha$ на данных, определяемых вектором $R$:
-    $$u: \mathcal{A} \times \{0,1\}^N \to \mathbb{R},$$
-    где $\mathcal{A}$ -- пространство архитектур.
+    Суррогатная функция $u(\alpha, R)$ предсказывает среднюю по объектам кросс-энтропийную ошибку (loss) архитектуры $\alpha$, обученной на данных, определяемых вектором $R$:
+    $$u: \mathcal{A} \times \{0,1\}^M \to \mathbb{R}_{\geq 0},$$
+    где $\mathcal{A}$ -- пространство архитектур, $M$ -- число кластеров.
+
+    \medskip
+
+    Суррогат выражает пообъектное правдоподобие эксперта (отрицательное лог-правдоподобие):
+    $$u(\alpha_k, R_k) \approx -\log p\bigl(y_n \mid x_n, \alpha_k, \theta_k,\ m(n) \in C_k\bigr).$$
 
     \bigskip
 
-    Суррогат представляет собой нейронную сеть или Гауссовский процесс, который обучается на триплетах $(\alpha, b, a)$, где $b \in \{0,1\}^N$, $a$ -- точность архитектуры, обученной на данных, соответствующих $b$.
+    Суррогат представляет собой графовую нейронную сеть, обучаемую на триплетах $(\alpha, b, \ell)$, где $b \in \{0,1\}^M$ -- маска подмножества кластеров, $\ell$ -- кросс-энтропийная ошибка архитектуры, обученной на данных, соответствующих $b$.
+
+\end{frame}
+%----------------------------------------------------------------------------------------------------------
+\begin{frame}{Постановка задачи}
+    \begin{block}{Максимизация правдоподобия смеси экспертов}
+        \vspace{-8mm}
+        \begin{gather*}
+            \prod_{n=1}^{N} \sum_{k=1}^{K} p(y_n, m(n) \in C_k \mid x_n, \alpha_k, \theta_k) \to \max_{\alpha_1, \dots, \alpha_K, \theta_1, \dots, \theta_K},
+        \end{gather*}
+        где $K$ -- кол-во экспертов, $N$ -- кол-во элементов данных, $m(n)$ -- номер кластера элемента $n$. Для $k$-ого эксперта $C_k$ -- множество индексов назначенных ему кластеров, $\theta_k$ -- параметры, $\alpha_k$ -- архитектура.
+    \end{block}
+
+    \begin{block}{Задача поиска архитектуры смеси из $K$ экспертов}
+    \vspace{-5mm}
+    \begin{gather*}
+        \sum_{m=1}^{M} |\mathcal{C}_m|\, \log \sum_{k=1}^{K} r_{mk}\, e^{-u(\alpha_k, R_k)} \to \max_{\alpha_1,\ldots,\alpha_K,\, R_1,\ldots,R_K},
+    \end{gather*}
+    где $M$ --- число кластеров данных, $|\mathcal{C}_m|$ --- размер кластера $m$, $r_{mk}$ --- вероятность назначения кластера $m$ эксперту $k$, $R_k = \{r_{mk}\}_{m=1}^{M}$.
+    \end{block}
 
 \end{frame}
 %----------------------------------------------------------------------------------------------------------
@@ -124,11 +129,11 @@
   \begin{minipage}{1.\linewidth}
     \begin{algorithm}[H]
     \caption{SGEM}\label{alg:em}
-        \begin{algorithmic}[1]
+        \begin{algorithmic}
             \State \textbf{Вход:} $K$, данные, кластеризация, $u^{(0)}$ --- начальный суррогат
             \For{$t = 0, 1, 2, \ldots$}
-                \State \textbf{E-шаг:} $q_{mk}^{(t)} \sim r_{mk}^{(t)}\, u^{(t)}(\alpha_k^{(t)}, R_k^{(t)})$
-                \State \textbf{M-шаг:} $\sum_m \sum_k q^{(t)}_{mk} \log\left(r_{mk} u^{(t)}(\alpha_k, R_k)\right) \to \max_{\overline{\alpha}, \overline{R}}$
+                \State \textbf{E-шаг:} $q_{mk}^{(t)} \propto r_{mk}^{(t)}\, e^{-u^{(t)}(\alpha_k^{(t)}, R_k^{(t)})}$
+                \State \textbf{M-шаг:} $\sum_m |\mathcal{C}_m| \sum_k q^{(t)}_{mk} \left[\log r_{mk} - u^{(t)}(\alpha_k, R_k)\right] \to \max_{\overline{\alpha}, \overline{R}}$
                 \State \textbf{S-шаг:} добавить актуальные данные, переобучить $u$
             \EndFor
         \end{algorithmic}
@@ -138,7 +143,7 @@
 
 \bigskip
 
-\textbf{Градиентный метод}: вместо E/M-шагов --- прямая градиентная оптимизация $r$ и $\alpha$.
+На шаг $S$ суррогат $u^{(t)}$ дообучается и с ростом $t$ стремится к истинной оценке правдоподобия экспертов $u_{\mathrm{true}}$.
 
 \end{frame}
 %----------------------------------------------------------------------------------------------------------
@@ -147,13 +152,13 @@
     colback=gray!10, colframe=gray!50, arc=5mm,
     boxsep=0.5mm, left=3mm, right=3mm, top=2mm, bottom=2mm
     ]
-    \textbf{Теорема.} Пусть $\{\theta^{(t)} = (\alpha^{(t)}, r^{(t)})\}_{t=1}^\infty$ --- последовательность GEM-алгоритма с суррогатом $u^{(t)}$, и выполнены условия: (1)~равномерная ограниченность $u_{\mathrm{true}}$ и $\{u^{(t)}\}_{t=1}^\infty$, (2)~$\sum_{t=1}^\infty \varepsilon_t < \infty$ где $\varepsilon_t = \sup |\log u^{(t)} - \log u_{\mathrm{true}}|$, (3)~на $M$-шаге $\mathcal{F}$-функция не убывает, (4)~$u(\alpha, r)$ непрерывно по второму аргументу $\forall \alpha \in \mathcal{A}$. Тогда:
+    \textbf{Теорема.} Пусть $\{\theta^{(t)} = (\alpha^{(t)}, r^{(t)})\}_{t=1}^\infty$ --- последовательность GEM-алгоритма с суррогатом $u^{(t)}$, и выполнены условия: (1) равномерная ограниченность $u_{true}, \{u^{(t)}\}_{t=1}^\infty$, (2) $\sum_{t=1}^\infty \varepsilon_t < \infty$ где $\varepsilon_t = \sup |u^{(t)} - u_{\mathrm{true}}|$, (3) на $M$-шаге $F$-функция не убывает, (4) $u(\alpha, r)$ непрерывно по второму аргументу $\forall \alpha \in \mathcal{A}$. Тогда:
 
     \medskip
     \textbf{(a)} $\{L_{\mathrm{true}}(\theta^{(t)})\}$ сходится.
 
     \textbf{(b)} Любая предельная точка $\theta^{\star}$ является стационарной:
-    $Q_{\mathrm{true}}(\theta;\, \theta^{\star}) \leq Q_{\mathrm{true}}(\theta^{\star};\, \theta^{\star})$ для всех $\theta \in \Theta$, где $Q_{\mathrm{true}}(\theta;\, \theta') = \sum_m \sum_k w_{mk}(\theta')\, \log\!\bigl(r_{mk}\, u_{\mathrm{true}}(\alpha_k, R_k)\bigr)$ и $w_{mk}(\theta') = q_{mk}^{\star}(\theta')$.
+    $Q_{\mathrm{true}}(\theta;\, \theta^{\star}) \leq Q_{\mathrm{true}}(\theta^{\star};\, \theta^{\star})$ для всех $\theta \in \Theta$, где $Q_{\mathrm{true}}(\theta;\, \theta') = \sum_m |\mathcal{C}_m| \sum_k w_{mk}(\theta')\, \bigl[\log r_{mk} - u_{\mathrm{true}}(\alpha_k, R_k)\bigr]$ и $w_{mk}(\theta') = q_{mk}^{\star}(\theta')$.
     \end{tcolorbox}
 
     \medskip
@@ -162,112 +167,144 @@
 
 \end{frame}
 %----------------------------------------------------------------------------------------------------------
-\begin{frame}{Цели вычислительного эксперимента}
+% \begin{frame}{Цели вычислительного эксперимента}
 
-    \begin{block}{Показать применимость метода}
-        \begin{itemize}
-            \item Проверить семантическую кластеризуемость реальных датасетов.
-            \item Показать, что существует разброс точностей архитектур на разных кластерах данных.
-        \end{itemize}
-    \end{block}
+%     \begin{block}{Показать применимость метода}
+%         \begin{itemize}
+%             \item Проверить семантическую кластеризуемость реальных датасетов.
+%             \item Показать, что существует разброс точностей архитектур на разных кластерах данных.
+%         \end{itemize}
+%     \end{block}
 
-    \bigskip
+%     \bigskip
 
-    \begin{block}{Проверить эффективность работы метода}
-        \begin{itemize}
-            \item Проверить эффективность методов для нахождения разбиения и архитектур на синтетических данных.
-        \end{itemize}
-    \end{block}
+%     \begin{block}{Проверить эффективность работы метода}
+%         \begin{itemize}
+%             \item Проверить эффективность методов для нахождения разбиения и архитектур на синтетических данных.
+%         \end{itemize}
+%     \end{block}
 
-\end{frame}
+% \end{frame}
 %----------------------------------------------------------------------------------------------------------
-\begin{frame}{Применимость метода}
+% \begin{frame}{Применимость метода}
 
-    Существует разброс точности архитектуры по кластерам.
+%     Существует разброс точности архитектуры по кластерам.
+
+%     \begin{columns}[c]
+%     \column{0.4\textwidth}
+%         \begin{figure}
+%             \includegraphics[scale=0.14]
+%             {clusters}
+%         \end{figure}
+
+%     \column{0.6\textwidth}
+%         \begin{figure}
+%             \includegraphics[scale=0.19]
+%             {acc_std}
+%         \end{figure}
+%     \end{columns}
+
+%     \bigskip
+
+%     Разброс в среднем составляет 2\%. Минимум он составляет 1,2\%.
+
+% \end{frame}
+%----------------------------------------------------------------------------------------------------------
+\begin{frame}{Проверка на сэмплированных данных}
+
+    Сэмплированные данные с двумя явными видами распределений. В пространстве поиска находится $3^7$ архитектур.
+
 
     \begin{columns}[c]
-    \column{0.4\textwidth}
-        \begin{figure}
-            \includegraphics[scale=0.14]
-            {clusters}
-        \end{figure}
-
-    \column{0.6\textwidth}
-        \begin{figure}
-            \includegraphics[scale=0.19]
-            {acc_std}
-        \end{figure}
-    \end{columns}
-
-    \bigskip
-
-    Разброс в среднем составляет 2\%. Минимум он составляет 1,2\%.
-
-\end{frame}
-%----------------------------------------------------------------------------------------------------------
-\begin{frame}{Эффективность работы}
-
-    \begin{columns}[c]
-    \column{0.5\textwidth}
+    \column{0.55\textwidth}
         \begin{figure}
             \includegraphics[width=\textwidth]{dataset}
         \end{figure}
-    \column{0.5\textwidth}
+    \column{0.55\textwidth}
         \begin{figure}
             \includegraphics[width=\textwidth]{found_split}
         \end{figure}
     \end{columns}
 
-    \vspace{-1mm}
+    \bigskip    
 
-    \begin{table}[h!]
-    \centering
-    \small
-        \begin{tabular}{ |l|c|c|c| }
-        \hline
-        \textbf{Метод} & \textbf{Split} & \textbf{Совпадение} & \textbf{MoE acc} \\
-        \hline
-         SGEM & [7, 13] & \textbf{20/20} & \textbf{95.6\%}$^*$ \\
-        \hline
-         Единая архитектура & --- & --- & $\sim$75\% \\
-        \hline
-        \end{tabular}
-    \end{table}
+    EM-алгоритм с S-шагом нашёл наилучшее разбиение кластеров на синтетическом датасете и подобрал референсные архитектуры: линейную и использующую ядро RBF.
 
-    \vspace{-2mm}
-    \footnotesize $^*$С референсными архитектурами (linear + RBF) на найденном split.
 
 \end{frame}
 %----------------------------------------------------------------------------------------------------------
-\begin{frame}{Заключение}
+\begin{frame}{Смесь CIFAR100 и SVHN}
+
+    Был составлен датасет путем смешивания CIFAR100 и SVHN в равных пропорциях.
+
+    \begin{columns}[c]
+    \column{0.5\textwidth}
+        \begin{figure}
+            \includegraphics[width=0.8\textwidth]{reps5}
+            \caption*{Представители семантических кластеров}
+        \end{figure}
+
+    \column{0.5\textwidth}
+
+        \medskip
+
+        \footnotesize
+        \begin{table}[]
+            \begin{tabular}{ |l|c| }
+            \hline
+            \textbf{Метод} & \textbf{Test Acc.} \\
+            \hline
+            Random-MoE & $0.547 \pm 0.029$ \\
+            \hline
+            DARTS$\times K$ & $0.591 \pm 0.009$ \\
+            \hline
+            SGEM (наш) & $\mathbf{0.620 \pm 0.009}$ \\
+            \hline
+            \hline
+            Oracle MoE$^{*}$ & $0.633 \pm 0.004$ \\
+            \hline
+
+            \end{tabular}
+            \vspace{0.6cm}
+        \caption*{Точность MoE ($^{*}$оракулу даны метки источника)}
+        \end{table}
+    \end{columns}
+
+    \bigskip    
+
+    Без меток источника SGEM сделал экспертов специалистами по датасетам: один эксперт --- по CIFAR-100, другой --- по SVHN, превосходя baseline-методы.
+
+
+\end{frame}
+%----------------------------------------------------------------------------------------------------------
+\begin{frame}{Выносится на защиту}
     \begin{block}{Достигнутые результаты:}
         \begin{itemize}
             \item Предложена постановка задачи для нахождения архитектуры смеси экспертов с помощью суррогатной функции
-            \item Предложен метод SGEM для решения поставленной задачи
+            \item Предложен метод SGEM для решения поставленной задачи, метод проверен на экспериментах
             \item Доказана теорема о сходимости GEM-алгоритма с адаптивным суррогатом
-            \item В экспериментах алгоритм показал свою эффективность
         \end{itemize}
     \end{block}
 
-    \begin{block}{Дальнейшая работа}
+    \begin{block}{Доклады по теме работы}
         \begin{itemize}
-            \item Провести эксперименты на реальных датасетах (CIFAR, ImageNet)
-            \item Сравнить с конкурирующими методами (AutoMoE, DSR)
-            \item Исследовать масштабируемость метода на большое число экспертов
+            \item Выступление на конференции МФТИ 2026
+            \item Смежная работа подана на рецензируемую конференцию AIAI / EAAAI (EANN) 2026
+            % \item Исследовать масштабируемость метода на большое число экспертов
         \end{itemize}
     \end{block}
 \end{frame}
 %----------------------------------------------------------------------------------------------------------
-\begin{frame}{Литература}
-    \begin{itemize}
-        \setlength\itemsep{0.7em}
-        \small
-        \item Chen Z. et al. Towards understanding mixture of experts in deep learning // arXiv:2208.02813, 2022.
-        \item Jiang L. et al. AutoMoE: Heterogeneous mixture-of-experts with adaptive computation // ACL 2023.
-        \item Piwko J. et al. Divide, specialize, and route: a new approach to efficient ensemble learning // arXiv:2506.20814, 2025.
-        \item Dempster A.P. et al. Maximum likelihood from incomplete data via the EM algorithm // JRSS-B, 1977.
-        \item Wu C.F.J. On the convergence properties of the EM algorithm // Annals of Statistics, 1983.
-    \end{itemize}
-\end{frame}
+% \begin{frame}{Литература}
+%     \begin{itemize}
+%         \setlength\itemsep{0.7em}
+%         \small
+%         \item Chen Z. et al. Towards understanding mixture of experts in deep learning // arXiv:2208.02813, 2022.
+%         \item Jiang L. et al. AutoMoE: Heterogeneous mixture-of-experts with adaptive computation // ACL 2023.
+%         \item Piwko J. et al. Divide, specialize, and route: a new approach to efficient ensemble learning // arXiv:2506.20814, 2025.
+%         \item Dempster A.P. et al. Maximum likelihood from incomplete data via the EM algorithm // JRSS-B, 1977.
+%         \item Wu C.F.J. On the convergence properties of the EM algorithm // Annals of Statistics, 1983.
+%     \end{itemize}
+% \end{frame}
 %----------------------------------------------------------------------------------------------------------
 \end{document}
